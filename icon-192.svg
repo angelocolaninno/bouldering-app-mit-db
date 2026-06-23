@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <!-- Parchment background -->
+  <rect width="192" height="192" rx="40" fill="#efe9dc"/>
+
+  <!-- Mountain silhouette: two peaks, ink dark -->
+  <path d="M96 38 L148 130 H44 Z" fill="#29261b"/>
+  <!-- Second smaller peak overlapping -->
+  <path d="M140 68 L172 130 H108 Z" fill="#3d3929"/>
+
+  <!-- Snow cap on main peak -->
+  <path d="M96 38 L109 64 L96 58 L83 64 Z" fill="#f6f2ea"/>
+
+  <!-- Decorative border ring -->
+  <circle cx="96" cy="96" r="82" fill="none" stroke="#29261b" stroke-width="3" stroke-dasharray="6 4" opacity="0.35"/>
+
+  <!-- Bottom arc label band -->
+  <path d="M32 148 A68 68 0 0 0 160 148" fill="none" stroke="#29261b" stroke-width="1.2" opacity="0.25"/>
+
+  <!-- "SB" monogram below mountain -->
+  <text x="96" y="158" font-family="Georgia, serif" font-size="20" font-weight="600"
+        text-anchor="middle" fill="#29261b" letter-spacing="6" opacity="0.75">SB</text>
+</svg>

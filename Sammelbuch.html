@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sammelbuch — Boulder-Jahr</title>
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Sammelbuch">
+  <link rel="apple-touch-icon" href="icon-192.svg">
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..600&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; background: #efe9dc; font-family: system-ui, -apple-system, sans-serif; color: #29261b; min-height: 100vh; }
+    body { display: block; padding: 0; box-sizing: border-box; }
+    #root { display: block; }
+    body::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none;
+      background-image: radial-gradient(rgba(41,38,27,0.04) 1px, transparent 1px), radial-gradient(rgba(41,38,27,0.03) 1px, transparent 1px);
+      background-size: 4px 4px, 7px 7px; background-position: 0 0, 2px 3px; opacity: 0.6; z-index: 0;
+    }
+    #loading {
+      position: fixed; inset: 0; z-index: 9999; background: #efe9dc;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Newsreader', Georgia, serif; font-size: 18px; font-style: italic;
+      color: rgba(41,38,27,0.55); letter-spacing: 0.02em; pointer-events: none;
+    }
+    #tweaks-btn {
+      position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: 16px; z-index: 9998;
+      width: 36px; height: 36px; border-radius: 50%; border: 0;
+      background: rgba(41,38,27,0.12); color: #29261b; font-size: 16px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12); transition: background .15s;
+    }
+    #tweaks-btn:hover { background: rgba(41,38,27,0.2); }
+  </style>
+</head>
+<body>
+  <svg style="position:absolute;width:0;height:0;overflow:hidden">
+    <defs>
+      <filter id="ink-rough" x="-5%" y="-5%" width="110%" height="110%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="4" seed="3" result="noise"/>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+    </defs>
+  </svg>
+  <div id="loading">Sammelbuch lädt…</div>
+  <button id="tweaks-btn" title="Tweaks öffnen (oder ? drücken)">&#9881;</button>
+  <div id="root" style="position:relative;z-index:1"></div>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+  <script type="text/babel">
+
+// ─────────────────────────────────────────────────────────────
+// DATA
+// ─────────────────────────────────────────────────────────────
+const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
+const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
+
+function toRoman(n) {
+  const map=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+  let r=''; for (const [v,s] of map) { while (n>=v) { r+=s; n-=v; } } return r;
+}
+const ROMAN_YEAR = toRoman(YEAR);
+
+// Check-ins eines Jahres aus localStorage lesen (Schlüssel pro Jahr: sb-checkins-<jahr>)
+function loadCheckins(year) {
+  try { return JSON.parse(localStorage.getItem(`sb-checkins-${year}`) || '[]'); } catch { return []; }
+}
+// Anstrengungs-Level pro Tag (sparse: nur abweichende von 'normal' werden gespeichert)
+function loadLevels(year) {
+  try { return JSON.parse(localStorage.getItem(`sb-levels-${year}`) || '{}'); } catch { return {}; }
+}
+
+// ── Farben: Akzent zu 'leicht' (heller, Richtung Papier) / 'stark' (dunkler, Richtung Tinte) mischen ──
+const PAPER='#f6f2ea', INK='#29261b';
+function hexToRgb(h){ h=h.replace('#',''); if(h.length===3) h=h.split('').map((c)=>c+c).join(''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; }
+function rgbToHex(r,g,b){ return '#'+[r,g,b].map((x)=>Math.max(0,Math.min(255,Math.round(x))).toString(16).padStart(2,'0')).join(''); }
+function mixHex(a,b,t){ const [r1,g1,b1]=hexToRgb(a),[r2,g2,b2]=hexToRgb(b); return rgbToHex(r1+(r2-r1)*t,g1+(g2-g1)*t,b1+(b2-b1)*t); }
+function levelColor(accent, level){
+  if (level==='leicht') return mixHex(accent, PAPER, 0.58);
+  if (level==='stark')  return mixHex(accent, INK, 0.5);
+  return accent; // normal
+}
+const LEVEL_OPTS=[{v:'leicht',label:'Leicht'},{v:'normal',label:'Normal'},{v:'stark',label:'Stark'}];
+
+// ── Teilbare Jahres-Karte als PNG auf ein Canvas zeichnen (kein externes Lib) ──
+function roundRectPath(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+async function buildYearCardBlob({ year, stats, accent, levels={} }) {
+  if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch {} }
+  const W=1080, H=1350, INKc='#29261b';
+  const c=document.createElement('canvas'); c.width=W; c.height=H;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='#efe9dc'; ctx.fillRect(0,0,W,H);
+  roundRectPath(ctx,60,70,W-120,H-150,52); ctx.fillStyle='#fbf8f1'; ctx.fill();
+  ctx.lineWidth=1; ctx.strokeStyle='rgba(41,38,27,0.12)'; ctx.stroke();
+  const px=130;
+  ctx.textAlign='right'; ctx.fillStyle='rgba(41,38,27,0.42)'; ctx.font='40px Newsreader, serif';
+  ctx.fillText(toRoman(year), W-130, 205);
+  ctx.textAlign='left';
+  ctx.fillStyle='rgba(41,38,27,0.6)'; ctx.font='italic 42px Newsreader, serif';
+  ctx.fillText(`Dein Boulder-Jahr ${year}`, px, 205);
+  ctx.fillStyle=INKc; ctx.font='300 290px Newsreader, serif';
+  ctx.fillText(String(stats.total), px-6, 470);
+  ctx.fillStyle='rgba(41,38,27,0.62)'; ctx.font='38px -apple-system, system-ui, sans-serif';
+  ctx.fillText(`Besuche · ${stats.monthsHit} Monate · ${stats.longestStreak} Wochen Streak`, px, 540);
+  if (stats.sortedDays.length) { ctx.fillStyle='rgba(41,38,27,0.55)'; ctx.font='italic 36px Newsreader, serif';
+    ctx.fillText(`dabei seit ${dateFmtLong(parseISO(stats.sortedDays[0]))}`, px, 600); }
+  // Mini-Heatmap (12 Monate × 31 Tage)
+  const days=new Set(stats.sortedDays);
+  const labels=['J','F','M','A','M','J','J','A','S','O','N','D'];
+  const labW=34, hx=px+labW, hy=666, cols=31, gap=7;
+  const cw=(W-130-hx - gap*(cols-1))/cols, rgap=10, ch=cw;
+  ctx.font='22px Newsreader, serif'; ctx.textBaseline='middle';
+  for (let mi=0; mi<12; mi++) {
+    const yy=hy+mi*(ch+rgap);
+    ctx.fillStyle='rgba(41,38,27,0.4)'; ctx.textAlign='right';
+    ctx.fillText(labels[mi], px+labW-12, yy+ch/2);
+    const dim=new Date(year,mi+1,0).getDate();
+    for (let di=0; di<dim; di++) {
+      const iso=`${year}-${String(mi+1).padStart(2,'0')}-${String(di+1).padStart(2,'0')}`;
+      const hit=days.has(iso);
+      ctx.fillStyle=hit?levelColor(accent,levels[iso]||'normal'):'rgba(41,38,27,0.08)';
+      const cx=hx+di*(cw+gap)+cw/2, cy=yy+ch/2;
+      ctx.beginPath(); ctx.arc(cx,cy,cw*0.46,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+  const lineY=hy+12*(ch+rgap)+22;
+  ctx.strokeStyle='rgba(41,38,27,0.15)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(px,lineY); ctx.lineTo(W-130,lineY); ctx.stroke();
+  ctx.fillStyle=INKc; ctx.font='italic 40px Newsreader, serif';
+  ctx.fillText('«Der Berg kennt deinen Namen.»', px, lineY+58);
+  ctx.fillStyle='rgba(41,38,27,0.4)'; ctx.font='600 24px -apple-system, system-ui, sans-serif';
+  if ('letterSpacing' in ctx) ctx.letterSpacing='6px';
+  ctx.fillText('SAMMELBUCH', px, H-110);
+  if ('letterSpacing' in ctx) ctx.letterSpacing='0px';
+  return new Promise((res)=>c.toBlob(res,'image/png'));
+}
+function downloadBlob(blob, name){
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+// Alle Jahre, für die Daten existieren (plus aktuelles Jahr), absteigend sortiert
+function availableYears() {
+  const years=new Set([YEAR]);
+  for (let i=0;i<localStorage.length;i++) {
+    const k=localStorage.key(i);
+    const m=k && k.match(/^sb-checkins-(\d{4})$/);
+    if (m) years.add(Number(m[1]));
+  }
+  return [...years].sort((a,b)=>b-a);
+}
+
+const DEMO_CHECKINS = [
+  '2026-01-08','2026-01-13','2026-01-22',
+  '2026-02-03','2026-02-10','2026-02-17','2026-02-26',
+  '2026-03-05','2026-03-12','2026-03-19','2026-03-28',
+  '2026-04-07','2026-04-14','2026-04-23',
+  '2026-05-05','2026-05-12','2026-05-19','2026-05-26',
+  '2026-06-09','2026-06-23',
+  '2026-07-14',
+  '2026-08-11','2026-08-25',
+  '2026-09-03','2026-09-10','2026-09-17','2026-09-24',
+  '2026-10-02','2026-10-08','2026-10-15','2026-10-22','2026-10-29',
+  '2026-11-03','2026-11-05','2026-11-10','2026-11-12','2026-11-19','2026-11-26',
+];
+
+function parseISO(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); }
+function isoDay(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function isoWeek(d) {
+  const t = new Date(d.valueOf()); t.setHours(0,0,0,0);
+  t.setDate(t.getDate() + 3 - ((t.getDay()+6)%7));
+  const w1 = new Date(t.getFullYear(),0,4);
+  return 1 + Math.round(((t-w1)/86400000 - 3 + ((w1.getDay()+6)%7))/7);
+}
+function isWinter(d) { const m = d.getMonth(); return m===11||m===0||m===1; }
+function dateFmtShort(d) { return d.toLocaleDateString('de-CH',{day:'2-digit',month:'short'}); }
+function dateFmtLong(d) { return d.toLocaleDateString('de-CH',{day:'numeric',month:'long'}); }
+
+function weekStreaks(checkinSet) {
+  const weeks = new Set();
+  for (const s of checkinSet) { const d=parseISO(s); weeks.add(`${d.getFullYear()}-W${isoWeek(d)}`); }
+  const sorted = [...weeks].sort();
+  let longest=0, cur=0, last=null;
+  for (const k of sorted) {
+    const wn = Number(k.split('-W')[1]);
+    if (last!==null && wn===last+1) cur+=1; else cur=1;
+    longest = Math.max(longest,cur); last=wn;
+  }
+  return longest;
+}
+
+const BADGES = [
+  { id:'erste',   label:'Erstbegehung',  hint:'Dein erster Besuch',              glyph:'1',   palette:['#6b7a4b','#3d4527'], condition:(s)=>s.total>=1,              earnedISO:(s)=>s.sortedDays[0] },
+  { id:'funf',    label:'5 Besuche',     hint:'Fünf gestempelte Tage',           glyph:'V',   palette:['#7a6a4f','#3f3520'], condition:(s)=>s.total>=5,              earnedISO:(s)=>s.sortedDays[4] },
+  { id:'zehn',    label:'10 Besuche',    hint:'Zehn Besuche dieses Jahr',        glyph:'X',   palette:['#6b6862','#2b2925'], condition:(s)=>s.total>=10,             earnedISO:(s)=>s.sortedDays[9] },
+  { id:'xxv',     label:'25 Besuche',    hint:'Halbzeitmedaille',                glyph:'XXV', palette:['#a48a5b','#4e3d1f'], condition:(s)=>s.total>=25,             earnedISO:(s)=>s.sortedDays[24] },
+  { id:'funfzig', label:'50 Besuche',    hint:'Jahresziel — fünfzig Besuche',   glyph:'L',   palette:['#b3543a','#5a2515'], condition:(s)=>s.total>=50,             earnedISO:(s)=>s.sortedDays[49] },
+  { id:'streak3', label:'Drei Wochen',   hint:'Drei Wochen in Folge',            glyph:'≡',   palette:['#b3543a','#5a2515'], condition:(s)=>s.longestStreak>=3,      earnedISO:(s)=>s.sortedDays[s.sortedDays.length-1] },
+  { id:'winter',  label:'Winter-Boulder',hint:'Besuch im Dez., Jan. oder Feb.', glyph:'✻',   palette:['#4a5a6a','#1e2530'], condition:(s)=>s.winterCount>0,         earnedISO:(s)=>s.firstWinter },
+  { id:'spring',  label:'Tauwetter',     hint:'Erster Besuch im März',           glyph:'✿',   palette:['#6b7a4b','#3d4527'], condition:(s)=>s.sortedDays.some((d)=>parseISO(d).getMonth()===2), earnedISO:(s)=>s.sortedDays.find((d)=>parseISO(d).getMonth()===2) },
+  { id:'doppel',  label:'Doppelpack',    hint:'Zweimal in einer Woche',          glyph:'II',  palette:['#6b6862','#2b2925'], condition:(s)=>s.doubleWeek,            earnedISO:(s)=>s.doubleWeekISO },
+  { id:'sammler', label:'Stammgast',     hint:'Jeden Monat mind. einmal',        glyph:'✦',   palette:['#7a6a4f','#3f3520'], condition:(s)=>s.monthsHit>=11,         earnedISO:(s)=>s.sortedDays[s.sortedDays.length-1] },
+];
+
+function computeStats(checkins) {
+  const set = new Set(checkins);
+  const sortedDays = [...set].sort();
+  const total = sortedDays.length;
+  const longestStreak = weekStreaks(set);
+  const monthsSet = new Set(sortedDays.map((d)=>parseISO(d).getMonth()));
+  const monthsHit = monthsSet.size;
+  const winterDays = sortedDays.filter((d)=>isWinter(parseISO(d)));
+  const winterCount = winterDays.length;
+  const firstWinter = winterDays[0];
+  const weekCounts = {}; let doubleWeekISO = null;
+  for (const d of sortedDays) {
+    const k = `${parseISO(d).getFullYear()}-W${isoWeek(parseISO(d))}`;
+    weekCounts[k] = (weekCounts[k]||0)+1;
+    if (weekCounts[k]===2 && !doubleWeekISO) doubleWeekISO = d;
+  }
+  const weeksVisited = new Set(sortedDays.map((d)=>isoWeek(parseISO(d))));
+  return { sortedDays, total, longestStreak, monthsHit, winterCount, firstWinter, doubleWeek:!!doubleWeekISO, doubleWeekISO, weeksVisited };
+}
+
+function earnedBadges(stats) {
+  return BADGES.map((b)=>({ ...b, earned:b.condition(stats), earnedISO:b.condition(stats)?b.earnedISO(stats):null }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// iOS DEVICE FRAME
+// ─────────────────────────────────────────────────────────────
+// Responsive Vollbild-Shell: füllt das echte Gerät, auf breiten Screens
+// auf eine Telefon-Spaltenbreite zentriert. Kein Fake-Geräterahmen mehr.
+function IOSDevice({ children }) {
+  return (
+    <div style={{ width:'100%', maxWidth:480, minHeight:'100dvh', margin:'0 auto', position:'relative', overflow:'hidden', background:'#f6f2ea', boxShadow:'0 0 80px rgba(0,0,0,0.12)', fontFamily:'-apple-system,system-ui,sans-serif', WebkitFontSmoothing:'antialiased' }}>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// TWEAKS PANEL
+// ─────────────────────────────────────────────────────────────
+const __TWEAKS_STYLE = `
+  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;background:rgba(250,249,247,.88);color:#29261b;-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);border:.5px solid rgba(255,255,255,.6);border-radius:14px;box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  .twk-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 8px 10px 14px;cursor:move;user-select:none}
+  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);width:22px;height:22px;border-radius:6px;cursor:pointer;font-size:13px;line-height:1}
+  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;min-height:0;scrollbar-width:thin}
+  .twk-row{display:flex;flex-direction:column;gap:5px}
+  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;color:rgba(41,38,27,.72)}
+  .twk-lbl>span:first-child{font-weight:500}
+  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(41,38,27,.45);padding:10px 0 0}
+  .twk-sect:first-child{padding-top:0}
+  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:pointer}
+  .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;background:rgba(0,0,0,.06);user-select:none}
+  .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
+  .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;border-radius:6px;cursor:pointer;padding:4px 6px;line-height:1.2}
+  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;background:rgba(0,0,0,.15);transition:background .15s;cursor:pointer;padding:0}
+  .twk-toggle[data-on="1"]{background:#34c759}
+  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+  .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:pointer}
+  .twk-btn:hover{background:rgba(0,0,0,.88)}
+  .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
+  .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
+  .twk-chips{display:flex;gap:6px}
+  .twk-chip{position:relative;appearance:none;flex:1;min-width:0;height:40px;padding:0;border:0;border-radius:6px;overflow:hidden;cursor:pointer;box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.06);transition:transform .12s,box-shadow .12s}
+  .twk-chip[data-on="1"]{box-shadow:0 0 0 2px rgba(0,0,0,.85),0 2px 6px rgba(0,0,0,.15)}
+  .twk-chip svg{position:absolute;top:6px;left:6px;width:13px;height:13px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.3))}
+`;
+
+function TweaksPanel({ title='Tweaks', children }) {
+  const [open, setOpen] = React.useState(false);
+  const dragRef = React.useRef(null);
+  const offsetRef = React.useRef({ x:16, y:16 });
+
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      if (e?.data?.type==='__activate_edit_mode') setOpen(true);
+      else if (e?.data?.type==='__deactivate_edit_mode') setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key==='?' && !e.target.closest('input,textarea,select')) {
+        window.dispatchEvent(new MessageEvent('message', { data:{ type:'__activate_edit_mode' } }));
+      }
+    };
+    const gearBtn = document.getElementById('tweaks-btn');
+    const onGear = () => window.dispatchEvent(new MessageEvent('message', { data:{ type:'__activate_edit_mode' } }));
+    window.addEventListener('message', onMsg);
+    window.addEventListener('keydown', onKey);
+    if (gearBtn) gearBtn.addEventListener('click', onGear);
+    window.parent.postMessage({ type:'__edit_mode_available' }, '*');
+    return () => {
+      window.removeEventListener('message', onMsg);
+      window.removeEventListener('keydown', onKey);
+      if (gearBtn) gearBtn.removeEventListener('click', onGear);
+    };
+  }, []);
+
+  // Das Zahnrad (#tweaks-btn) liegt als <body>-Kind über dem #root-Stacking-Context
+  // und damit über dem Panel. Solange offen, ausblenden — sonst überdeckt es den ✕.
+  React.useEffect(() => {
+    const gearBtn = document.getElementById('tweaks-btn');
+    if (gearBtn) gearBtn.style.display = open ? 'none' : '';
+    return () => { if (gearBtn) gearBtn.style.display = ''; };
+  }, [open]);
+
+  const dismiss = () => {
+    setOpen(false);
+    window.parent.postMessage({ type:'__edit_mode_dismissed' }, '*');
+  };
+
+  const onDragStart = (e) => {
+    if (e.target.closest('button')) return;   // Taps auf Bedienelemente (✕) dürfen kein Verschieben auslösen
+    const panel = dragRef.current; if (!panel) return;
+    const r = panel.getBoundingClientRect();
+    const sx=e.clientX, sy=e.clientY;
+    const startRight=window.innerWidth-r.right, startBottom=window.innerHeight-r.bottom;
+    const move=(ev)=>{ offsetRef.current={x:startRight-(ev.clientX-sx),y:startBottom-(ev.clientY-sy)}; panel.style.right=offsetRef.current.x+'px'; panel.style.bottom=offsetRef.current.y+'px'; };
+    const up=()=>{ window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up); };
+    window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+  };
+
+  if (!open) return null;
+  return (
+    <>
+      <style>{__TWEAKS_STYLE}</style>
+      <div onClick={dismiss} style={{ position:'fixed', inset:0, zIndex:2147483645, background:'transparent' }} />
+      <div ref={dragRef} className="twk-panel" style={{ right:offsetRef.current.x, bottom:offsetRef.current.y }}>
+        <div className="twk-hd" onMouseDown={onDragStart}>
+          <b>{title}</b>
+          <button className="twk-x" onClick={dismiss}>✕</button>
+        </div>
+        <div className="twk-body">{children}</div>
+      </div>
+    </>
+  );
+}
+
+function TweakSection({ label, children }) {
+  return <><div className="twk-sect">{label}</div>{children}</>;
+}
+
+function TweakSlider({ label, value, min=0, max=100, step=1, unit='', onChange }) {
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl"><span>{label}</span><span className="twk-val">{value}{unit}</span></div>
+      <input type="range" className="twk-slider" min={min} max={max} step={step} value={value} onChange={(e)=>onChange(Number(e.target.value))} />
+    </div>
+  );
+}
+
+function TweakToggle({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <button type="button" className="twk-toggle" data-on={value?'1':'0'} onClick={()=>onChange(!value)}><i/></button>
+    </div>
+  );
+}
+
+function TweakRadio({ label, value, options, onChange }) {
+  const opts = options.map((o)=>(typeof o==='object'?o:{value:o,label:o}));
+  const idx = Math.max(0, opts.findIndex((o)=>o.value===value));
+  const n = opts.length;
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <div className="twk-seg">
+        <div className="twk-seg-thumb" style={{ left:`calc(2px + ${idx} * (100% - 4px) / ${n})`, width:`calc((100% - 4px) / ${n})` }} />
+        {opts.map((o)=>(
+          <button key={o.value} type="button" onClick={()=>onChange(o.value)}>{o.label}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TweakColor({ label, value, options, onChange }) {
+  const key=(o)=>String(JSON.stringify(o)).toLowerCase();
+  const cur=key(value);
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <div className="twk-chips">
+        {options.map((o,i)=>{
+          const on=key(o)===cur;
+          return (
+            <button key={i} className="twk-chip" data-on={on?'1':'0'} style={{ background:o }} onClick={()=>onChange(o)}>
+              {on && <svg viewBox="0 0 14 14"><path d="M3 7.2 5.8 10 11 4.2" fill="none" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" stroke="#fff"/></svg>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TweakButton({ label, onClick, secondary=false }) {
+  return <button type="button" className={secondary?'twk-btn secondary':'twk-btn'} onClick={onClick}>{label}</button>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// BADGE EMBLEMS
+// ─────────────────────────────────────────────────────────────
+const EMBLEMS = {
+  erste: (c) => (
+    <g>
+      <path d="M3 19 L12 6 L21 19 Z" fill="none" stroke={c} strokeWidth="1.4" strokeLinejoin="round"/>
+      <path d="M9 13 L12 10 L14.5 12.5" fill="none" stroke={c} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.7"/>
+    </g>
+  ),
+  funf: (c) => <text x="12" y="17.5" textAnchor="middle" fontFamily="Newsreader,serif" fontSize="14" fontWeight="500" fill={c}>V</text>,
+  zehn: (c) => <text x="12" y="17.5" textAnchor="middle" fontFamily="Newsreader,serif" fontSize="14" fontWeight="500" fill={c}>X</text>,
+  xxv: (c) => <text x="12" y="17" textAnchor="middle" fontFamily="Newsreader,serif" fontSize="9.5" fontWeight="500" fill={c}>XXV</text>,
+  funfzig: (c) => <text x="12" y="17.5" textAnchor="middle" fontFamily="Newsreader,serif" fontSize="14" fontWeight="500" fill={c}>L</text>,
+  streak3: (c) => (
+    <g fill="none" stroke={c} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 9 L12 5 L18 9"/>
+      <path d="M6 14 L12 10 L18 14"/>
+      <path d="M6 19 L12 15 L18 19"/>
+    </g>
+  ),
+  winter: (c) => (
+    <g stroke={c} strokeWidth="1.2" strokeLinecap="round" fill="none">
+      <line x1="12" y1="3" x2="12" y2="21"/><line x1="4.2" y1="7.5" x2="19.8" y2="16.5"/><line x1="4.2" y1="16.5" x2="19.8" y2="7.5"/>
+      <path d="M12 5 L10.6 6.5 M12 5 L13.4 6.5"/><path d="M12 19 L10.6 17.5 M12 19 L13.4 17.5"/>
+      <path d="M5.5 8.3 L7.4 8.3 M5.5 8.3 L6.5 9.9"/><path d="M18.5 15.7 L16.6 15.7 M18.5 15.7 L17.5 14.1"/>
+    </g>
+  ),
+  spring: (c) => (
+    <g fill="none" stroke={c} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20 L12 11"/>
+      <path d="M12 13 C 8 13 6 10 6 7 C 9 7 12 9 12 13 Z" fill={c} fillOpacity="0.18"/>
+      <path d="M12 11 C 16 11 18 8 18 5 C 15 5 12 7 12 11 Z" fill={c} fillOpacity="0.18"/>
+    </g>
+  ),
+  doppel: (c) => <text x="12" y="17.5" textAnchor="middle" fontFamily="Newsreader,serif" fontSize="14" fontWeight="500" fill={c}>II</text>,
+  sammler: (c) => (
+    <g fill={c}>
+      <path d="M12 3 L13 11 L21 12 L13 13 L12 21 L11 13 L3 12 L11 11 Z" opacity="0.95"/>
+      <path d="M12 5.5 L12.5 11.5 L18.5 12 L12.5 12.5 L12 18.5 L11.5 12.5 L5.5 12 L11.5 11.5 Z" opacity="0.4" transform="rotate(45 12 12)"/>
+    </g>
+  ),
+};
+
+function AlpinBadge({ badge, size=96, earned=true }) {
+  const id = React.useId().replace(/:/g,'');
+  const r=size/2;
+  const [top,bottom]=badge.palette;
+  const c1=earned?top:'#bbb3a4', c2=earned?bottom:'#8e8676';
+  const cream='#f6f0e1', ink=earned?'#29261b':'#857c6b';
+  const RING_R=r*0.96, BOUT=r*0.88, BIN=r*0.74, FIELD=r*0.72;
+  return (
+    <div style={{ width:size, height:size, filter:earned?'none':'opacity(.7)', transition:'filter .25s' }}>
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ display:'block' }}>
+        <defs>
+          <path id={`bt-${id}`} d={`M ${r-BOUT*0.95} ${r} A ${BOUT*0.95} ${BOUT*0.95} 0 0 0 ${r+BOUT*0.95} ${r}`} fill="none"/>
+          <radialGradient id={`fg-${id}`} cx="50%" cy="38%" r="65%">
+            <stop offset="0%" stopColor={c1}/><stop offset="100%" stopColor={c2}/>
+          </radialGradient>
+        </defs>
+        <circle cx={r} cy={r} r={RING_R} fill={cream} stroke={ink} strokeOpacity={earned?0.85:0.35} strokeWidth={size*0.012}/>
+        <path d={`M ${r-BOUT} ${r} A ${BOUT} ${BOUT} 0 0 1 ${r+BOUT} ${r} L ${r+BIN} ${r} A ${BIN} ${BIN} 0 0 0 ${r-BIN} ${r} Z`} fill={c1}/>
+        <path d={`M ${r-BOUT} ${r} A ${BOUT} ${BOUT} 0 0 0 ${r+BOUT} ${r} L ${r+BIN} ${r} A ${BIN} ${BIN} 0 0 1 ${r-BIN} ${r} Z`} fill={c2}/>
+        <circle cx={r} cy={r} r={BOUT} fill="none" stroke={ink} strokeOpacity="0.35" strokeWidth="0.5"/>
+        <circle cx={r} cy={r} r={BIN} fill="none" stroke={ink} strokeOpacity="0.3" strokeWidth="0.5"/>
+        <circle cx={r} cy={r} r={FIELD} fill={`url(#fg-${id})`}/>
+        {[0,90,180,270].map((deg)=>{
+          const a=(deg-90)*Math.PI/180;
+          return <line key={deg} x1={r+Math.cos(a)*BIN} y1={r+Math.sin(a)*BIN} x2={r+Math.cos(a)*BOUT} y2={r+Math.sin(a)*BOUT} stroke={cream} strokeOpacity="0.65" strokeWidth="1"/>;
+        })}
+        <text fontFamily="Newsreader,serif" fontSize={size*0.075} fontWeight="500" letterSpacing={size*0.04} fill={cream} opacity="0.85">
+          <textPath href={`#bt-${id}`} xlinkHref={`#bt-${id}`} startOffset="50%" textAnchor="middle">{`· ${ROMAN_YEAR} ·`}</textPath>
+        </text>
+        <g transform={`translate(${r-FIELD*0.78},${r-FIELD*0.78}) scale(${FIELD*1.56/24})`}>
+          {EMBLEMS[badge.id]?EMBLEMS[badge.id](cream):<text x="12" y="17" textAnchor="middle" fontFamily="Newsreader,serif" fontSize="14" fill={cream}>{badge.glyph}</text>}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+function AlpinBadgeMini({ badge, size=40, earned=true }) {
+  const id=React.useId().replace(/:/g,''); const r=size/2;
+  const [top,bottom]=badge.palette;
+  const c1=earned?top:'#bbb3a4', c2=earned?bottom:'#8e8676';
+  const cream='#f6f0e1', BOUT=r*0.92, BIN=r*0.74, FIELD=r*0.72;
+  return (
+    <div style={{ width:size, height:size, filter:earned?'none':'opacity(.55) saturate(.4)' }}>
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
+        <defs><radialGradient id={`mfg-${id}`} cx="50%" cy="38%" r="65%"><stop offset="0%" stopColor={c1}/><stop offset="100%" stopColor={c2}/></radialGradient></defs>
+        <circle cx={r} cy={r} r={r*0.96} fill={cream} stroke={earned?'#29261b':'#857c6b'} strokeOpacity="0.7" strokeWidth="0.8"/>
+        <path d={`M ${r-BOUT} ${r} A ${BOUT} ${BOUT} 0 0 1 ${r+BOUT} ${r} L ${r+BIN} ${r} A ${BIN} ${BIN} 0 0 0 ${r-BIN} ${r} Z`} fill={c1}/>
+        <path d={`M ${r-BOUT} ${r} A ${BOUT} ${BOUT} 0 0 0 ${r+BOUT} ${r} L ${r+BIN} ${r} A ${BIN} ${BIN} 0 0 1 ${r-BIN} ${r} Z`} fill={c2}/>
+        <circle cx={r} cy={r} r={FIELD} fill={`url(#mfg-${id})`}/>
+        <g transform={`translate(${r-FIELD*0.78},${r-FIELD*0.78}) scale(${FIELD*1.56/24})`}>
+          {EMBLEMS[badge.id]&&EMBLEMS[badge.id](cream)}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+function AlpinBadgeLocked({ size=96 }) {
+  const r=size/2;
+  return (
+    <div style={{ width:size, height:size }}>
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
+        <circle cx={r} cy={r} r={r*0.96} fill="none" stroke="rgba(41,38,27,0.18)" strokeWidth="1" strokeDasharray="3 4"/>
+        <circle cx={r} cy={r} r={r*0.72} fill="rgba(41,38,27,0.035)"/>
+        <g transform={`translate(${r-8},${r-8})`} stroke="rgba(41,38,27,0.35)" strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="7" width="12" height="8" rx="1.5" fill="rgba(41,38,27,0.04)"/>
+          <path d="M5 7 V5 a3 3 0 0 1 6 0 V7"/>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// VISUALIZATIONS
+// ─────────────────────────────────────────────────────────────
+function VizHeatmap({ stats, accent, todayISO, year=YEAR, levels={} }) {
+  const days=new Set(stats.sortedDays);
+  const months=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
+  return (
+    <div style={{ fontFamily:'system-ui,-apple-system,sans-serif', padding:'12px 16px 0' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'24px repeat(31,1fr)', rowGap:5, columnGap:2, alignItems:'center' }}>
+        <div/>
+        {[...Array(31)].map((_,i)=>(
+          <div key={i} style={{ fontSize:8, color:'rgba(41,38,27,0.32)', textAlign:'center', height:10, lineHeight:'10px' }}>
+            {(i+1)%5===0||i===0?i+1:''}
+          </div>
+        ))}
+        {months.map((m,mi)=>{
+          const dim=new Date(year,mi+1,0).getDate();
+          return (
+            <React.Fragment key={m}>
+              <div style={{ fontSize:10, color:'rgba(41,38,27,0.55)', fontWeight:500, letterSpacing:'.02em', paddingRight:4, textAlign:'right' }}>{m}</div>
+              {[...Array(31)].map((_,di)=>{
+                if (di>=dim) return <div key={di}/>;
+                const iso=`${year}-${String(mi+1).padStart(2,'0')}-${String(di+1).padStart(2,'0')}`;
+                const hit=days.has(iso), isToday=iso===todayISO, future=iso>todayISO;
+                return (
+                  <div key={di} style={{ width:'100%', aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <div style={{ width:hit?'85%':'40%', aspectRatio:'1', borderRadius:'50%', background:hit?levelColor(accent,levels[iso]||'normal'):(future?'transparent':'rgba(41,38,27,0.08)'), border:isToday&&!hit?`1px dashed ${accent}`:'none', boxShadow:isToday&&hit?`0 0 0 2px rgba(41,38,27,0.12)`:'none', transition:'background .25s' }}/>
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel }) {
+  const set=new Set(stats.sortedDays);
+  const monthNames=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  const [m,setM]=React.useState(()=> year===YEAR ? new Date().getMonth() : 0);
+  const [sel,setSel]=React.useState(null);   // ausgewählter Tag für die Stufen-Bearbeitung
+  React.useEffect(()=>{ setM(year===YEAR ? new Date().getMonth() : 0); setSel(null); },[year]);
+  const dim=new Date(year,m+1,0).getDate();
+  const startDow=(new Date(year,m,1).getDay()+6)%7; // Montag = 0
+  const prefix=`${year}-${String(m+1).padStart(2,'0')}`;
+  const monthCount=[...set].filter((d)=>d.startsWith(prefix)).length;
+  const cells=[]; for (let i=0;i<startDow;i++) cells.push(null); for (let d=1;d<=dim;d++) cells.push(d);
+  const arrow={appearance:'none',border:0,background:'transparent',color:'rgba(41,38,27,0.55)',fontSize:22,lineHeight:1,cursor:'pointer',padding:'0 8px',fontFamily:'Newsreader,serif'};
+  const editable=!!onToggle;
+  const goMonth=(nm)=>{ setM(nm); setSel(null); };
+  const onCell=(iso,hit)=>{
+    if (!editable) return;
+    if (!hit) { onToggle(iso); setSel(iso); }        // leer → hinzufügen (normal) + auswählen
+    else if (sel===iso) { onToggle(iso); setSel(null); }  // ausgewählten Tag erneut antippen → wieder entfernen
+    else setSel(iso);                                // anderen belegten Tag → auswählen (Stufe ändern / Entfernen)
+  };
+  return (
+    <div style={{ padding:'8px 18px 4px', fontFamily:'system-ui,-apple-system,sans-serif' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+        <button type="button" style={{...arrow,opacity:m===0?0.3:1}} onClick={()=>goMonth(Math.max(0,m-1))} disabled={m===0}>‹</button>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:22, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em', lineHeight:1.1 }}>{monthNames[m]}</div>
+          <div style={{ fontSize:10, letterSpacing:'.1em', textTransform:'uppercase', color:'rgba(41,38,27,0.45)', fontWeight:600, marginTop:2 }}>{monthCount===0?'noch leer':`${monthCount} ${monthCount===1?'Besuch':'Besuche'}`}</div>
+        </div>
+        <button type="button" style={{...arrow,opacity:m===11?0.3:1}} onClick={()=>goMonth(Math.min(11,m+1))} disabled={m===11}>›</button>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:4 }}>
+        {['Mo','Di','Mi','Do','Fr','Sa','So'].map((w,i)=>(
+          <div key={i} style={{ textAlign:'center', fontSize:10, fontWeight:600, letterSpacing:'.04em', color:'rgba(41,38,27,0.4)', paddingBottom:2 }}>{w}</div>
+        ))}
+        {cells.map((d,i)=>{
+          if (d===null) return <div key={i}/>;
+          const iso=`${prefix}-${String(d).padStart(2,'0')}`;
+          const hit=set.has(iso), isToday=iso===todayISO, future=iso>todayISO, isSel=sel===iso;
+          const fill=hit?levelColor(accent, levels[iso]||'normal'):'transparent';
+          const circle=(
+            <div style={{ width:'82%', aspectRatio:'1', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+              background:fill, border:isToday&&!hit?`1.2px dashed ${accent}`:'none',
+              fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', fontSize:16,
+              color:hit?'#f6f0e1':(future?'rgba(41,38,27,0.28)':'rgba(41,38,27,0.7)'),
+              boxShadow:isSel?`0 0 0 2px ${accent}`:(hit?'0 1px 4px rgba(41,38,27,0.18)':'none'), transition:'background .25s,color .25s,box-shadow .15s' }}>{d}</div>
+          );
+          if (editable && !future) {
+            return (
+              <button key={i} type="button" onClick={()=>onCell(iso,hit)}
+                style={{ aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center', border:0, background:'transparent', padding:0, cursor:'pointer', WebkitTapHighlightColor:'transparent' }}>{circle}</button>
+            );
+          }
+          return <div key={i} style={{ aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center' }}>{circle}</div>;
+        })}
+      </div>
+      {editable && onSetLevel && sel && (
+        <div style={{ marginTop:14, padding:'12px 14px', background:'#fbf8f1', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.12)' }}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:8 }}>
+            <span style={{ fontFamily:'Newsreader,serif', fontSize:15, color:'#29261b' }}>{dateFmtLong(parseISO(sel))} · Anstrengung</span>
+            <button type="button" onClick={()=>{ onToggle(sel); setSel(null); }} style={{ appearance:'none', border:0, background:'transparent', color:'rgba(179,84,58,0.85)', fontSize:12, fontWeight:600, cursor:'pointer' }}>Entfernen</button>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            {LEVEL_OPTS.map((o)=>{
+              const on=(levels[sel]||'normal')===o.v;
+              return (
+                <button key={o.v} type="button" onClick={()=>onSetLevel(sel,o.v)}
+                  style={{ flex:1, padding:'9px 0', borderRadius:999, border:on?`1px solid ${accent}`:'0.5px solid rgba(41,38,27,0.2)',
+                    background:on?accent:'rgba(41,38,27,0.04)', color:on?'#f6f0e1':'#29261b', fontSize:13, fontWeight:500, cursor:'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+                  <span style={{ width:9, height:9, borderRadius:'50%', background:on?'#f6f0e1':levelColor(accent,o.v) }}/>{o.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// SCREENS
+// ─────────────────────────────────────────────────────────────
+function Stat({ label, value, hint }) {
+  return (
+    <div>
+      <div style={{ fontSize:11, letterSpacing:'.08em', textTransform:'uppercase', color:'rgba(41,38,27,0.5)', fontFamily:'system-ui', fontWeight:500 }}>{label}</div>
+      <div style={{ fontFamily:'Newsreader,serif', fontSize:32, fontWeight:400, color:'#29261b', lineHeight:1.05, fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.01em', marginTop:2 }}>{value}</div>
+      {hint&&<div style={{ fontSize:11, color:'rgba(41,38,27,0.45)', marginTop:2 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function VizSegment({ value, onChange }) {
+  const opts=[{v:'heat',label:'Jahr'},{v:'month',label:'Monat'}];
+  return (
+    <div style={{ display:'flex', gap:0, margin:'0 16px', padding:3, background:'rgba(41,38,27,0.06)', borderRadius:10, position:'relative' }}>
+      <div style={{ position:'absolute', top:3, bottom:3, left:`calc(3px + ${opts.findIndex((o)=>o.v===value)} * (100% - 6px) / ${opts.length})`, width:`calc((100% - 6px) / ${opts.length})`, background:'#fbf8f1', borderRadius:8, boxShadow:'0 0.5px 0 rgba(41,38,27,0.08),0 1px 3px rgba(41,38,27,0.08)', transition:'left .2s cubic-bezier(.3,.7,.4,1)' }}/>
+      {opts.map((o)=>(
+        <button key={o.v} onClick={()=>onChange(o.v)} style={{ flex:1, padding:'7px 0', background:'transparent', border:0, fontFamily:'system-ui', fontSize:13, fontWeight:500, color:value===o.v?'#29261b':'rgba(41,38,27,0.55)', position:'relative', zIndex:1, cursor:'pointer' }}>{o.label}</button>
+      ))}
+    </div>
+  );
+}
+
+function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, onToggleDay, onSetLevel, onNachtragen }) {
+  const remaining=Math.max(0,goal-stats.total);
+  const goalPct=Math.min(100,Math.round((stats.total/goal)*100));
+  const viewingPast=year!==YEAR;
+  const btnDisabled=checkedInToday||showDemo||viewingPast;
+  return (
+    <div style={{ paddingBottom:110 }}>
+      <div style={{ padding:'64px 20px 14px', display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+        <div>
+          <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Sammelbuch</div>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:38, fontWeight:400, color:'#29261b', fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.015em', marginTop:1 }}>{year}</div>
+          {stats.sortedDays.length>0
+            ? <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:13, color:'rgba(41,38,27,0.55)', marginTop:2 }}>dabei seit {dateFmtLong(parseISO(stats.sortedDays[0]))}</div>
+            : <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:13, color:'rgba(41,38,27,0.45)', marginTop:2 }}>noch kein Eintrag</div>}
+        </div>
+        <div style={{ position:'relative', width:64, height:64 }}>
+          <svg viewBox="0 0 64 64" width="64" height="64">
+            <circle cx="32" cy="32" r="28" fill="none" stroke="rgba(41,38,27,0.1)" strokeWidth="3"/>
+            <circle cx="32" cy="32" r="28" fill="none" stroke={accent} strokeWidth="3" strokeDasharray={Math.PI*56} strokeDashoffset={Math.PI*56*(1-goalPct/100)} strokeLinecap="round" transform="rotate(-90 32 32)" style={{ transition:'stroke-dashoffset .5s' }}/>
+          </svg>
+          <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', color:'#29261b' }}>
+            <div style={{ fontSize:18, lineHeight:1, fontWeight:500 }}>{goalPct}</div>
+            <div style={{ fontSize:9, color:'rgba(41,38,27,0.45)', fontFamily:'system-ui', letterSpacing:'.06em', textTransform:'uppercase', marginTop:1 }}>Ziel</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ display:'flex', gap:30, padding:'6px 20px 22px', borderBottom:'0.5px solid rgba(41,38,27,0.1)' }}>
+        <Stat label="Besuche" value={stats.total}/>
+        <Stat label="Streak" value={`${stats.longestStreak} W.`} hint="in Folge"/>
+        <Stat label="Monate" value={`${stats.monthsHit}/12`}/>
+      </div>
+      <div style={{ padding:'14px 0 4px' }}>
+        <VizSegment value={viz} onChange={setViz}/>
+      </div>
+      <div style={{ minHeight:220 }}>
+        {viz==='heat'&&<VizHeatmap stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels}/>}
+        {viz==='month'&&<VizMonth stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels}/>}{/* nur Anzeige — Bearbeiten über „Vergangenen Tag nachtragen" */}
+      </div>
+      <div style={{ padding:'24px 20px 0' }}>
+        <button onClick={onCheckin} disabled={btnDisabled} style={{ width:'100%', padding:'20px 24px', background:btnDisabled?'rgba(41,38,27,0.06)':'#29261b', color:btnDisabled?'rgba(41,38,27,0.55)':'#f6f2ea', border:0, borderRadius:18, fontFamily:'Newsreader,serif', fontSize:21, fontWeight:500, letterSpacing:'-0.005em', display:'flex', alignItems:'center', justifyContent:'space-between', boxShadow:btnDisabled?'none':'0 2px 0 rgba(0,0,0,0.04),0 12px 30px rgba(41,38,27,0.18)', cursor:btnDisabled?'default':'pointer', transition:'all .2s' }}>
+          <span>{viewingPast?`Archiv ${year}`:checkedInToday?'Heute gestempelt':showDemo?'Demo-Modus':'Heute gebouldert'}</span>
+          <span style={{ fontFamily:'system-ui', fontSize:13, opacity:0.7, fontWeight:500, letterSpacing:'.04em' }}>{viewingPast?'🔒':checkedInToday?'✓':showDemo?'–':dateFmtShort(TODAY)}</span>
+        </button>
+        <div style={{ fontSize:12, color:'rgba(41,38,27,0.45)', marginTop:10, textAlign:'center', fontFamily:'system-ui' }}>
+          {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:`Noch ${remaining} bis zum Jahresziel.`}
+        </div>
+        {!showDemo&&onNachtragen&&(
+          <button onClick={onNachtragen} style={{ display:'block', margin:'14px auto 0', padding:'8px 16px', background:'transparent', border:'0.5px solid rgba(41,38,27,0.2)', borderRadius:999, fontFamily:'system-ui', fontSize:13, fontWeight:500, color:'rgba(41,38,27,0.7)', cursor:'pointer' }}>＋ Vergangenen Tag nachtragen</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0 6px' }}>
+      <div style={{ fontSize:11, letterSpacing:'.14em', textTransform:'uppercase', color:'rgba(41,38,27,0.5)', fontFamily:'system-ui', fontWeight:600 }}>{children}</div>
+      <div style={{ flex:1, height:0.5, background:'rgba(41,38,27,0.12)' }}/>
+    </div>
+  );
+}
+
+function BadgeCell({ badge }) {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, padding:'4px 0' }}>
+      <AlpinBadge badge={badge} size={84} earned/>
+      <div style={{ fontFamily:'Newsreader,serif', fontSize:13, fontWeight:500, color:'#29261b', letterSpacing:'-0.005em', textAlign:'center', lineHeight:1.15, marginTop:4, padding:'0 2px' }}>{badge.label}</div>
+      {badge.earnedISO&&<div style={{ fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', fontStyle:'italic', fontSize:11, color:'rgba(41,38,27,0.5)', lineHeight:1 }}>{dateFmtShort(parseISO(badge.earnedISO))}</div>}
+    </div>
+  );
+}
+
+function LockedCell({ badge }) {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, padding:'4px 0' }}>
+      <AlpinBadgeLocked size={84}/>
+      <div style={{ fontFamily:'Newsreader,serif', fontSize:12, fontWeight:500, color:'rgba(41,38,27,0.55)', textAlign:'center', lineHeight:1.2, marginTop:4, padding:'0 4px' }}>{badge.label}</div>
+      <div style={{ fontFamily:'system-ui', fontSize:10, color:'rgba(41,38,27,0.4)', textAlign:'center', padding:'0 6px', lineHeight:1.3 }}>{badge.hint}</div>
+    </div>
+  );
+}
+
+function ErfolgeScreen({ stats, badges }) {
+  const earned=badges.filter((b)=>b.earned), locked=badges.filter((b)=>!b.earned);
+  const latest=[...earned].sort((a,b)=>(b.earnedISO||'').localeCompare(a.earnedISO||''))[0];
+  const rest=earned.filter((b)=>!latest||b.id!==latest.id);
+  return (
+    <div style={{ paddingBottom:110 }}>
+      <div style={{ padding:'60px 20px 18px', display:'flex', alignItems:'flex-end', justifyContent:'space-between' }}>
+        <div>
+          <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Erfolge</div>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:36, fontWeight:400, color:'#29261b', letterSpacing:'-0.015em', marginTop:2, lineHeight:1.05 }}>Anstecker-Sammlung</div>
+        </div>
+        <div style={{ textAlign:'right' }}>
+          <div style={{ fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', fontSize:28, fontWeight:500, color:'#29261b', lineHeight:1 }}>
+            {earned.length}<span style={{ color:'rgba(41,38,27,0.3)', fontWeight:400 }}> ⁄ {badges.length}</span>
+          </div>
+          <div style={{ fontSize:10, letterSpacing:'.1em', textTransform:'uppercase', color:'rgba(41,38,27,0.45)', fontFamily:'system-ui', fontWeight:600, marginTop:4 }}>verdient</div>
+        </div>
+      </div>
+      {latest&&(
+        <div style={{ margin:'4px 16px 0' }}>
+          <div style={{ background:'#fbf8f1', borderRadius:18, border:'0.5px solid rgba(41,38,27,0.1)', boxShadow:'0 1px 0 rgba(255,255,255,0.6) inset,0 6px 24px rgba(41,38,27,0.07)', padding:'18px 18px 18px 14px', display:'flex', alignItems:'center', gap:16, position:'relative', overflow:'hidden' }}>
+            <div style={{ position:'absolute', top:10, right:14, fontFamily:'Newsreader,serif', fontSize:10, fontStyle:'italic', letterSpacing:'.06em', color:'rgba(41,38,27,0.4)' }}>zuletzt verdient</div>
+            <AlpinBadge badge={latest} size={110} earned/>
+            <div style={{ flex:1, minWidth:0, paddingTop:8 }}>
+              <div style={{ fontFamily:'Newsreader,serif', fontSize:22, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em', lineHeight:1.1 }}>{latest.label}</div>
+              <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:14, color:'rgba(41,38,27,0.6)', marginTop:6, lineHeight:1.4 }}>{latest.hint}.</div>
+              {latest.earnedISO&&<div style={{ fontFamily:'system-ui', fontSize:11, letterSpacing:'.06em', textTransform:'uppercase', color:'rgba(41,38,27,0.5)', fontWeight:600, marginTop:10 }}>Eingestempelt · {dateFmtShort(parseISO(latest.earnedISO))}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+      {rest.length>0&&(
+        <div style={{ padding:'24px 8px 0' }}>
+          <div style={{ padding:'0 14px' }}><SectionLabel>Weitere Anstecker</SectionLabel></div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'20px 8px', marginTop:16, padding:'0 8px' }}>
+            {rest.map((b)=><BadgeCell key={b.id} badge={b}/>)}
+          </div>
+        </div>
+      )}
+      {locked.length>0&&(
+        <div style={{ padding:'28px 8px 0' }}>
+          <div style={{ padding:'0 14px' }}><SectionLabel>Noch offen</SectionLabel></div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'20px 8px', marginTop:16, padding:'0 8px' }}>
+            {locked.map((b)=><LockedCell key={b.id} badge={b}/>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniHeatmap({ stats, accent, year=YEAR, levels={} }) {
+  const days=new Set(stats.sortedDays);
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'14px repeat(31,1fr)', rowGap:2, columnGap:1 }}>
+      {['J','F','M','A','M','J','J','A','S','O','N','D'].map((m,mi)=>(
+        <React.Fragment key={mi}>
+          <div style={{ fontSize:8, color:'rgba(41,38,27,0.4)', fontFamily:'Newsreader,serif', fontStyle:'italic', textAlign:'right', paddingRight:3 }}>{m}</div>
+          {[...Array(31)].map((_,di)=>{
+            const dim=new Date(year,mi+1,0).getDate();
+            if (di>=dim) return <div key={di}/>;
+            const iso=`${year}-${String(mi+1).padStart(2,'0')}-${String(di+1).padStart(2,'0')}`;
+            return <div key={di} style={{ aspectRatio:'1', background:days.has(iso)?levelColor(accent,levels[iso]||'normal'):'rgba(41,38,27,0.07)', borderRadius:1 }}/>;
+          })}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function JahrScreen({ stats, badges, accent, year=YEAR, levels={} }) {
+  const earned=badges.filter((b)=>b.earned);
+  const highlight=earned.slice(-4);
+  const [busy,setBusy]=React.useState(false);
+  const saveCard=async()=>{
+    if (busy) return; setBusy(true);
+    try { const blob=await buildYearCardBlob({year,stats,accent,levels}); downloadBlob(blob,`sammelbuch-${year}.png`); }
+    catch { alert('Bild konnte nicht erstellt werden.'); }
+    finally { setBusy(false); }
+  };
+  const shareCard=async()=>{
+    if (busy) return; setBusy(true);
+    try {
+      const blob=await buildYearCardBlob({year,stats,accent,levels});
+      const file=new File([blob],`sammelbuch-${year}.png`,{type:'image/png'});
+      if (navigator.canShare && navigator.canShare({files:[file]})) {
+        await navigator.share({ files:[file], title:`Boulder-Jahr ${year}`, text:`Mein Boulder-Jahr ${year}: ${stats.total} Besuche.` });
+      } else if (navigator.share) {
+        await navigator.share({ title:`Boulder-Jahr ${year}`, text:`Mein Boulder-Jahr ${year}: ${stats.total} Besuche.` });
+      } else {
+        downloadBlob(blob,`sammelbuch-${year}.png`);  // Fallback: einfach speichern
+      }
+    } catch (e) { if (e && e.name!=='AbortError') downloadBlob(await buildYearCardBlob({year,stats,accent,levels}),`sammelbuch-${year}.png`); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ paddingBottom:110 }}>
+      <div style={{ padding:'64px 20px 14px' }}>
+        <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Jahr</div>
+        <div style={{ fontSize:13, color:'rgba(41,38,27,0.55)', marginTop:4, fontFamily:'Newsreader,serif', fontStyle:'italic' }}>Eine Karte zum Behalten oder Teilen.</div>
+      </div>
+      <div style={{ padding:'8px 16px 16px' }}>
+        <div style={{ background:'#fbf8f1', borderRadius:22, padding:'28px 24px 22px', border:'0.5px solid rgba(41,38,27,0.12)', boxShadow:'0 1px 0 rgba(255,255,255,0.5) inset,0 18px 50px rgba(41,38,27,0.14)', position:'relative', overflow:'hidden' }}>
+          <div style={{ position:'absolute', top:14, right:14, fontFamily:'Newsreader,serif', fontSize:11, letterSpacing:'.2em', color:'rgba(41,38,27,0.45)' }}>{toRoman(year)}</div>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:13, fontStyle:'italic', color:'rgba(41,38,27,0.6)' }}>Dein Boulder-Jahr {year}</div>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:84, fontWeight:400, color:'#29261b', fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.03em', lineHeight:0.95, marginTop:10 }}>{stats.total}</div>
+          <div style={{ fontFamily:'system-ui', fontSize:14, letterSpacing:'.04em', color:'rgba(41,38,27,0.6)', marginTop:4 }}>Besuche · {stats.monthsHit} Monate · {stats.longestStreak} Wochen Streak</div>
+          {stats.sortedDays.length>0&&<div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:13, color:'rgba(41,38,27,0.55)', marginTop:6 }}>dabei seit {dateFmtLong(parseISO(stats.sortedDays[0]))}</div>}
+          <div style={{ marginTop:18, marginBottom:8 }}><MiniHeatmap stats={stats} accent={accent} year={year} levels={levels}/></div>
+          <div style={{ borderTop:'0.5px solid rgba(41,38,27,0.15)', marginTop:16, paddingTop:14 }}>
+            <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:15, color:'#29261b', lineHeight:1.4 }}>«Der Berg kennt deinen Namen.»</div>
+          </div>
+          <div style={{ display:'flex', gap:10, marginTop:18, justifyContent:'flex-start' }}>
+            {highlight.map((b)=><AlpinBadgeMini key={b.id} badge={b} size={42}/>)}
+            {highlight.length<earned.length&&<div style={{ display:'flex', alignItems:'center', fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:12, color:'rgba(41,38,27,0.55)', marginLeft:4 }}>+{earned.length-highlight.length} weitere</div>}
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:10, marginTop:14 }}>
+          <button onClick={saveCard} disabled={busy} style={{ flex:1, padding:'14px 0', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:14, fontFamily:'system-ui', fontSize:14, fontWeight:600, letterSpacing:'.01em', cursor:busy?'default':'pointer', opacity:busy?0.6:1 }}>{busy?'…':'Bild speichern'}</button>
+          <button onClick={shareCard} disabled={busy} style={{ padding:'14px 18px', background:'transparent', color:'#29261b', border:'0.5px solid rgba(41,38,27,0.25)', borderRadius:14, fontFamily:'system-ui', fontSize:14, fontWeight:500, cursor:busy?'default':'pointer', opacity:busy?0.6:1 }}>Teilen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BottomNav({ tab, setTab }) {
+  const items=[
+    { id:'sammeln', label:'Sammeln', icon:<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 4.5C3 4.224 3.224 4 3.5 4H10v14H4.5C3.672 18 3 17.328 3 16.5V4.5Z" stroke="currentColor" strokeWidth="1.4"/><path d="M19 4.5C19 4.224 18.776 4 18.5 4H12v14H17.5C18.328 18 19 17.328 19 16.5V4.5Z" stroke="currentColor" strokeWidth="1.4"/></svg> },
+    { id:'erfolge', label:'Erfolge', icon:<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.4"/><path d="M7.5 13L6 19l5-2.5L16 19l-1.5-6" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/></svg> },
+    { id:'jahr', label:'Jahr', icon:<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3.5" y="4.5" width="15" height="14" rx="2" stroke="currentColor" strokeWidth="1.4"/><path d="M3.5 9h15" stroke="currentColor" strokeWidth="1.4"/><path d="M7 3v3M15 3v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg> },
+  ];
+  return (
+    <div style={{ position:'absolute', bottom:0, left:0, right:0, padding:'8px 10px calc(14px + env(safe-area-inset-bottom))', background:'rgba(246,242,234,0.85)', backdropFilter:'blur(20px) saturate(160%)', WebkitBackdropFilter:'blur(20px) saturate(160%)', borderTop:'0.5px solid rgba(41,38,27,0.12)', display:'flex', zIndex:5 }}>
+      {items.map((it)=>(
+        <button key={it.id} onClick={()=>setTab(it.id)} style={{ flex:1, padding:'8px 0 4px', background:'transparent', border:0, display:'flex', flexDirection:'column', alignItems:'center', gap:3, cursor:'pointer', opacity:tab===it.id?1:0.42, transition:'opacity .2s' }}>
+          <div style={{ color:'#29261b' }}>{it.icon}</div>
+          <div style={{ fontFamily:'system-ui', fontSize:10, fontWeight:600, letterSpacing:'.04em', color:'#29261b', textTransform:'uppercase' }}>{it.label}</div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// MOMENTS
+// ─────────────────────────────────────────────────────────────
+function Onboarding({ onDone, accent }) {
+  const [step, setStep]=React.useState(0);
+  const [goal, setGoal]=React.useState(40);
+  const slides=[
+    { eyebrow:'Willkommen', title:'Ein Jahr,\nein Sammelbuch.', body:'Jeder Besuch ist ein Stempel. Mehr nicht.\n\nKeine Routen, keine Grade, kein Zeitdruck — nur du, der Tag, der Tritt.', cta:'Weiter' },
+    { eyebrow:'Ritual', title:'Ein Klick\nnach der Halle.', body:'Heim, Schuhe aus, App auf, ein Tap.\n\nDie Seite raschelt, das Datum wird gestempelt, das Jahr füllt sich.', cta:'Weiter' },
+    { eyebrow:'Jahresziel', title:'Wie oft\ndieses Jahr?', body:'Setz dir eine ruhige Zahl. Du kannst sie jederzeit ändern.', cta:'Los geht\'s', picker:true },
+  ];
+  const s=slides[step];
+  return (
+    <div style={{ position:'absolute', inset:0, zIndex:100, background:'#f6f2ea', display:'flex', flexDirection:'column', padding:'54px 28px 36px' }}>
+      <div style={{ display:'flex', gap:6, marginTop:16 }}>
+        {slides.map((_,i)=><div key={i} style={{ flex:1, height:2, background:i<=step?'#29261b':'rgba(41,38,27,0.15)', borderRadius:1, transition:'background .25s' }}/>)}
+      </div>
+      <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', paddingBottom:40 }}>
+        <div style={{ fontSize:12, letterSpacing:'.16em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>{s.eyebrow}</div>
+        <div style={{ fontFamily:'Newsreader,serif', fontSize:44, fontWeight:400, color:'#29261b', letterSpacing:'-0.02em', lineHeight:1.05, whiteSpace:'pre-line', marginTop:14 }}>{s.title}</div>
+        <div style={{ fontFamily:'Newsreader,serif', fontSize:17, color:'rgba(41,38,27,0.7)', lineHeight:1.5, whiteSpace:'pre-line', marginTop:22, maxWidth:320 }}>{s.body}</div>
+        {s.picker&&(
+          <div style={{ marginTop:28 }}>
+            <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
+              <div style={{ fontFamily:'Newsreader,serif', fontSize:80, fontWeight:400, color:'#29261b', fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.02em', lineHeight:1 }}>{goal}</div>
+              <div style={{ fontFamily:'Newsreader,serif', fontSize:17, fontStyle:'italic', color:'rgba(41,38,27,0.55)' }}>Besuche</div>
+            </div>
+            <input type="range" min="10" max="120" step="5" value={goal} onChange={(e)=>setGoal(Number(e.target.value))} style={{ width:'100%', marginTop:18, accentColor:accent }}/>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(41,38,27,0.4)', fontFamily:'system-ui', marginTop:4 }}>
+              <span>gemütlich</span><span>ambitioniert</span>
+            </div>
+          </div>
+        )}
+      </div>
+      <button onClick={()=>{ if (step===slides.length-1) onDone(goal); else setStep(step+1); }} style={{ padding:'18px 24px', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:19, fontWeight:500, letterSpacing:'-0.005em', cursor:'pointer', boxShadow:'0 12px 30px rgba(41,38,27,0.18)' }}>{s.cta}</button>
+      {step<slides.length-1&&<button onClick={()=>onDone(40)} style={{ marginTop:12, padding:'8px 0', background:'transparent', border:0, fontFamily:'system-ui', fontSize:13, color:'rgba(41,38,27,0.5)', cursor:'pointer' }}>überspringen</button>}
+    </div>
+  );
+}
+
+function StampMotion({ phase, todayDate, accent }) {
+  const day=todayDate.getDate();
+  const month=todayDate.toLocaleDateString('de-CH',{month:'short'}).toUpperCase();
+  return (
+    <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div style={{ width:180, height:180, border:`3px solid ${accent}`, borderRadius:'50%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:accent, transform:phase==='in'?'scale(2.4) rotate(-12deg)':'scale(1) rotate(-6deg)', opacity:phase==='in'?0:1, transition:'transform .35s cubic-bezier(.5,1.5,.5,1),opacity .25s', filter:phase==='settle'?'url(#ink-rough)':'none', position:'relative' }}>
+        <div style={{ fontFamily:'Newsreader,serif', fontSize:56, fontWeight:500, fontVariantNumeric:'oldstyle-nums', lineHeight:1 }}>{day}</div>
+        <div style={{ fontFamily:'system-ui', fontSize:14, fontWeight:700, letterSpacing:'.18em', marginTop:4 }}>{month}</div>
+        <div style={{ position:'absolute', bottom:14, fontFamily:'system-ui', fontSize:9, letterSpacing:'.2em', opacity:0.7 }}>{ROMAN_YEAR}</div>
+        <div style={{ position:'absolute', top:-3, left:-3, right:-3, bottom:-3, border:`1px solid ${accent}`, borderRadius:'50%', opacity:0.5 }}/>
+      </div>
+    </div>
+  );
+}
+
+function FillMotion({ phase, todayDate, accent }) {
+  const day=todayDate.getDate();
+  return (
+    <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div style={{ position:'absolute', width:220, height:220, borderRadius:'50%', background:accent, transform:phase==='in'?'scale(0.05)':'scale(1)', opacity:phase==='in'?0:1, transition:'transform .7s cubic-bezier(.2,.8,.3,1),opacity .3s' }}/>
+      <div style={{ position:'relative', zIndex:1, fontFamily:'Newsreader,serif', fontSize:88, fontWeight:400, color:'#fbf8f1', fontVariantNumeric:'oldstyle-nums', opacity:phase==='in'?0:1, transform:phase==='in'?'translateY(6px)':'translateY(0)', transition:'opacity .35s .35s,transform .4s .3s' }}>{day}</div>
+    </div>
+  );
+}
+
+function RustleMotion({ phase, todayDate, accent }) {
+  const day=todayDate.getDate();
+  const month=todayDate.toLocaleDateString('de-CH',{month:'long'});
+  return (
+    <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+      {[0,1,2].map((i)=>(
+        <div key={i} style={{ position:'absolute', width:240, height:200, background:'#fbf6e9', border:'0.5px solid rgba(41,38,27,0.15)', borderRadius:4, boxShadow:'0 2px 6px rgba(41,38,27,0.08)', transform:phase==='in'?`translateY(${30-i*10}px) rotate(${-2+i*2}deg)`:`translateY(${-6+i*4}px) rotate(${-3+i*3}deg)`, opacity:phase==='in'?0:(1-i*0.25), transition:`transform .${5+i}s cubic-bezier(.3,.7,.4,1),opacity .35s`, zIndex:3-i }}/>
+      ))}
+      <div style={{ position:'relative', zIndex:10, textAlign:'center', opacity:phase==='in'?0:1, transform:phase==='in'?'translateY(20px)':'translateY(0)', transition:'opacity .4s .25s,transform .5s .2s' }}>
+        <div style={{ fontFamily:'Newsreader,serif', fontSize:80, fontWeight:400, color:accent, fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.02em', lineHeight:1 }}>{day}</div>
+        <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:17, color:'rgba(41,38,27,0.7)', marginTop:2 }}>{month}</div>
+      </div>
+    </div>
+  );
+}
+
+function CheckinMoment({ motion, total, todayDate, accent, onDone }) {
+  const [phase, setPhase]=React.useState('in');
+  React.useEffect(()=>{
+    const t1=setTimeout(()=>setPhase('settle'),900);
+    const t2=setTimeout(()=>setPhase('out'),2400);
+    const t3=setTimeout(onDone,2900);
+    return ()=>[t1,t2,t3].forEach(clearTimeout);
+  },[onDone]);
+  return (
+    <div style={{ position:'absolute', inset:0, zIndex:200, background:'rgba(246,242,234,0.96)', backdropFilter:'blur(12px)', WebkitBackdropFilter:'blur(12px)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', opacity:phase==='out'?0:1, transition:'opacity .4s' }}>
+      <div style={{ position:'relative', width:280, height:280 }}>
+        {motion==='stamp'&&<StampMotion phase={phase} todayDate={todayDate} accent={accent}/>}
+        {motion==='fill'&&<FillMotion phase={phase} todayDate={todayDate} accent={accent}/>}
+        {motion==='rustle'&&<RustleMotion phase={phase} todayDate={todayDate} accent={accent}/>}
+      </div>
+      <div style={{ fontFamily:'Newsreader,serif', fontSize:26, fontStyle:'italic', color:'#29261b', textAlign:'center', marginTop:14, opacity:phase==='settle'?1:0, transform:phase==='settle'?'translateY(0)':'translateY(8px)', transition:'opacity .4s .2s,transform .4s .2s' }}>Nice.</div>
+      <div style={{ fontFamily:'system-ui', fontSize:14, color:'rgba(41,38,27,0.55)', marginTop:6, opacity:phase==='settle'?1:0, transition:'opacity .4s .35s' }}>#{total} dieses Jahr</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────────────────────
+const ACCENT_OPTIONS = ['#6b6862','#6b7a4b','#b3543a','#4a5a6a'];
+
+// Vollbild-Dialog zum Nachtragen vergangener Tage (nutzt die editierbare Monatsansicht)
+function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, onClose }) {
+  return (
+    <div style={{ position:'absolute', inset:0, zIndex:150, background:'rgba(246,242,234,0.98)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', display:'flex', flexDirection:'column', padding:'calc(env(safe-area-inset-top) + 28px) 22px calc(env(safe-area-inset-bottom) + 24px)', overflowY:'auto' }}>
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
+        <div>
+          <div style={{ fontSize:12, letterSpacing:'.16em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Nachtragen</div>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:32, fontWeight:400, color:'#29261b', letterSpacing:'-0.015em', lineHeight:1.1, marginTop:6 }}>Vergessenen Tag eintragen</div>
+        </div>
+        <button onClick={onClose} aria-label="Schließen" style={{ flexShrink:0, width:34, height:34, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.08)', color:'#29261b', fontSize:15, cursor:'pointer', lineHeight:1 }}>✕</button>
+      </div>
+      <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:15, color:'rgba(41,38,27,0.6)', lineHeight:1.4, margin:'14px 0 8px', maxWidth:320 }}>
+        Tippe einen Tag an — er wird gestempelt. Nochmal tippen entfernt ihn wieder.
+      </div>
+      <div style={{ marginTop:8 }}>
+        <VizMonth stats={{ sortedDays: checkins }} accent={accent} todayISO={isoDay(TODAY)} year={year} levels={levels} onToggle={onToggle} onSetLevel={onSetLevel}/>
+      </div>
+      <button onClick={onClose} style={{ marginTop:'auto', padding:'16px 24px', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:18, fontWeight:500, cursor:'pointer', boxShadow:'0 12px 30px rgba(41,38,27,0.18)' }}>Fertig</button>
+    </div>
+  );
+}
+
+// Optionale Stufen-Rückfrage direkt nach dem Stempeln (Bottom-Sheet)
+function LevelPrompt({ accent, currentLevel='normal', onPick, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position:'absolute', inset:0, zIndex:210, background:'rgba(41,38,27,0.28)', display:'flex', flexDirection:'column', justifyContent:'flex-end' }}>
+      <div onClick={(e)=>e.stopPropagation()} style={{ background:'#f6f2ea', borderTopLeftRadius:24, borderTopRightRadius:24, padding:'22px 22px calc(env(safe-area-inset-bottom) + 24px)', boxShadow:'0 -10px 40px rgba(41,38,27,0.22)' }}>
+        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:22, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em' }}>Wie war heute?</div>
+          <button onClick={onClose} style={{ appearance:'none', border:0, background:'transparent', color:'rgba(41,38,27,0.5)', fontSize:13, fontFamily:'system-ui', cursor:'pointer' }}>überspringen</button>
+        </div>
+        <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:14, color:'rgba(41,38,27,0.58)', marginTop:3 }}>Optional · später jederzeit änderbar.</div>
+        <div style={{ display:'flex', gap:10, marginTop:18 }}>
+          {LEVEL_OPTS.map((o)=>{
+            const on=currentLevel===o.v;
+            return (
+              <button key={o.v} type="button" onClick={()=>onPick(o.v)}
+                style={{ flex:1, padding:'18px 0', borderRadius:18, border:on?`1.5px solid ${accent}`:'0.5px solid rgba(41,38,27,0.18)', background:'#fbf8f1', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap:10, boxShadow:'0 1px 0 rgba(255,255,255,0.6) inset' }}>
+                <span style={{ width:26, height:26, borderRadius:'50%', background:levelColor(accent,o.v), boxShadow:'0 1px 4px rgba(41,38,27,0.18)' }}/>
+                <span style={{ fontFamily:'system-ui', fontSize:14, fontWeight:500, color:'#29261b' }}>{o.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mini-Kalender im Tweaks-Panel zum Nachtragen/Löschen einzelner Tage
+function DayEditor({ year, checkins, accent, onToggle }) {
+  const set=new Set(checkins);
+  const monthNames=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  const [m,setM]=React.useState(()=> year===YEAR ? new Date().getMonth() : 0);
+  React.useEffect(()=>{ setM(year===YEAR ? new Date().getMonth() : 0); },[year]);
+  const dim=new Date(year,m+1,0).getDate();
+  const startDow=(new Date(year,m,1).getDay()+6)%7; // Montag = 0
+  const todayISO=isoDay(TODAY);
+  const cells=[]; for (let i=0;i<startDow;i++) cells.push(null); for (let d=1;d<=dim;d++) cells.push(d);
+  const navBtn={appearance:'none',border:0,background:'rgba(0,0,0,.06)',borderRadius:6,width:24,height:22,cursor:'pointer',color:'inherit',fontSize:14,lineHeight:1,display:'flex',alignItems:'center',justifyContent:'center'};
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl" style={{justifyContent:'space-between',alignItems:'center'}}>
+        <button type="button" style={{...navBtn,opacity:m===0?0.35:1}} onClick={()=>setM(Math.max(0,m-1))} disabled={m===0}>‹</button>
+        <span style={{fontWeight:500}}>{monthNames[m]} {year}</span>
+        <button type="button" style={{...navBtn,opacity:m===11?0.35:1}} onClick={()=>setM(Math.min(11,m+1))} disabled={m===11}>›</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3,marginTop:5}}>
+        {['M','D','M','D','F','S','S'].map((w,i)=><div key={i} style={{textAlign:'center',fontSize:9,color:'rgba(41,38,27,.4)',fontWeight:600}}>{w}</div>)}
+        {cells.map((d,i)=>{
+          if (d===null) return <div key={i}/>;
+          const iso=`${year}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+          const hit=set.has(iso), future=iso>todayISO;
+          return (
+            <button key={i} type="button" disabled={future} onClick={()=>onToggle(iso)}
+              style={{appearance:'none',border:hit?`1px solid ${accent}`:'1px solid transparent',borderRadius:6,height:26,padding:0,
+                cursor:future?'default':'pointer',background:hit?accent:'rgba(0,0,0,.05)',
+                color:hit?'#fff':(future?'rgba(41,38,27,.22)':'rgba(41,38,27,.7)'),fontSize:11,fontWeight:500,
+                fontVariantNumeric:'tabular-nums',opacity:future?0.5:1}}>{d}</button>
+          );
+        })}
+      </div>
+      <div style={{fontSize:10,color:'rgba(41,38,27,.45)',marginTop:6,lineHeight:1.3}}>Tag antippen = Besuch ein/aus.</div>
+    </div>
+  );
+}
+
+function loadAppData() {
+  try {
+    return {
+      checkins: JSON.parse(localStorage.getItem(`sb-checkins-${YEAR}`) || '[]'),
+      levels: loadLevels(YEAR),
+      goal: JSON.parse(localStorage.getItem('sb-goal') || '40'),
+      accent: localStorage.getItem('sb-accent') || '#6b6862',
+      onboarded: !!localStorage.getItem('sb-onboarded'),
+    };
+  } catch { return { checkins:[], levels:{}, goal:40, accent:'#6b6862', onboarded:false }; }
+}
+
+function App() {
+  const [tab, setTab]=React.useState('sammeln');
+  const [viz, setViz]=React.useState('heat');
+  const [motion, setMotion]=React.useState('stamp');
+  const [showDemo, setShowDemo]=React.useState(false);
+  const [appData, setAppData]=React.useState(loadAppData);
+  const [year, setYear]=React.useState(YEAR);          // angezeigtes Jahr (Archiv-Ansicht)
+  const [checkinActive, setCheckinActive]=React.useState(false);
+  const [onboardingActive, setOnboardingActive]=React.useState(!loadAppData().onboarded);
+  const [nachtragenOpen, setNachtragenOpen]=React.useState(false);
+  const [levelPromptISO, setLevelPromptISO]=React.useState(null);  // Tag, für den nach dem Stempeln die Stufe abgefragt wird
+  const fileInputRef=React.useRef(null);
+
+  // Remove loading indicator once React has mounted
+  React.useEffect(() => { document.getElementById('loading')?.remove(); }, []);
+
+  // Check-ins & Level neu laden, wenn das angezeigte Jahr wechselt
+  React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year)})); },[year]);
+
+  const todayISO=isoDay(TODAY);
+
+  const activeCheckins=React.useMemo(()=>{
+    if (showDemo) return DEMO_CHECKINS;
+    return appData.checkins;
+  },[showDemo,appData.checkins]);
+  const activeLevels = showDemo ? {} : appData.levels;
+
+  const stats=React.useMemo(()=>computeStats(activeCheckins),[activeCheckins]);
+  const badges=React.useMemo(()=>earnedBadges(stats),[stats]);
+  const checkedInToday=activeCheckins.includes(todayISO);
+
+  const onCheckin=()=>{ if (!showDemo && !checkedInToday && year===YEAR) setCheckinActive(true); };
+  const onCheckinDone=()=>{
+    setCheckinActive(false);
+    if (!showDemo && !checkedInToday) {
+      const next=[...new Set([...appData.checkins,todayISO])];
+      localStorage.setItem(`sb-checkins-${YEAR}`,JSON.stringify(next));
+      setAppData((d)=>({...d,checkins:next}));
+      setLevelPromptISO(todayISO);   // optionale Stufen-Rückfrage einblenden
+    }
+  };
+
+  // Anstrengungs-Stufe eines Tages setzen (sparse: 'normal' = kein Eintrag)
+  const setDayLevel=(iso, level)=>{
+    const map={...loadLevels(year)};
+    if (level==='normal') delete map[iso]; else map[iso]=level;
+    if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map));
+    else localStorage.removeItem(`sb-levels-${year}`);
+    setAppData((d)=>({...d,levels:map}));
+  };
+
+  const setGoal=(goal)=>{
+    localStorage.setItem('sb-goal',JSON.stringify(goal));
+    setAppData((d)=>({...d,goal}));
+  };
+  const setAccent=(accent)=>{
+    localStorage.setItem('sb-accent',accent);
+    setAppData((d)=>({...d,accent}));
+  };
+  // Einzelnen Tag im angezeigten Jahr nachtragen/löschen
+  const toggleDay=(iso)=>{
+    const cur=new Set(loadCheckins(year));
+    const removing=cur.has(iso);
+    if (removing) cur.delete(iso); else cur.add(iso);
+    const next=[...cur].sort();
+    localStorage.setItem(`sb-checkins-${year}`,JSON.stringify(next));
+    // beim Entfernen auch die Stufe löschen
+    let map=loadLevels(year);
+    if (removing && map[iso]) { map={...map}; delete map[iso];
+      if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map)); else localStorage.removeItem(`sb-levels-${year}`);
+    }
+    setAppData((d)=>({...d,checkins:next,levels:map}));
+  };
+
+  // Backup: alle sb-* Schlüssel als JSON-Datei herunterladen
+  const exportData=()=>{
+    const data={};
+    for (let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if (k && k.startsWith('sb-')) data[k]=localStorage.getItem(k); }
+    const payload={ app:'sammelbuch', version:1, exportedAt:new Date().toISOString(), data };
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=`sammelbuch-backup-${isoDay(TODAY)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+
+  // Backup einlesen: sb-* Schlüssel überschreiben und Ansicht neu laden
+  const importData=(file)=>{
+    const r=new FileReader();
+    r.onload=()=>{
+      try {
+        const parsed=JSON.parse(r.result);
+        const d=parsed.data||parsed;
+        let n=0;
+        Object.entries(d).forEach(([k,v])=>{ if (k.startsWith('sb-')){ localStorage.setItem(k, typeof v==='string'?v:JSON.stringify(v)); n++; } });
+        if (!n) { alert('Keine Sammelbuch-Daten in der Datei gefunden.'); return; }
+        const fresh=loadAppData();
+        setAppData({...fresh, checkins:loadCheckins(year), levels:loadLevels(year)});
+        setOnboardingActive(false);
+        alert(`Backup geladen ✓ (${n} Einträge)`);
+      } catch { alert('Konnte die Datei nicht lesen. Ist es ein Sammelbuch-Backup?'); }
+    };
+    r.readAsText(file);
+  };
+
+  const resetAll=()=>{
+    if (!confirm(`Wirklich alle Daten für ${year} zurücksetzen? Mach vorher ein Backup.`)) return;
+    localStorage.removeItem(`sb-checkins-${year}`);
+    localStorage.removeItem(`sb-levels-${year}`);
+    if (year===YEAR) {
+      localStorage.removeItem('sb-goal');
+      localStorage.removeItem('sb-accent');
+      localStorage.removeItem('sb-onboarded');
+      setAppData({checkins:[],levels:{},goal:40,accent:'#6b6862',onboarded:false});
+      setOnboardingActive(true);
+    } else {
+      setAppData((d)=>({...d,checkins:[],levels:{}}));
+    }
+  };
+
+  const years=availableYears();
+
+  return (
+    <IOSDevice>
+      <input ref={fileInputRef} type="file" accept="application/json,.json" style={{display:'none'}}
+        onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if (f) importData(f); e.target.value=''; }}/>
+      <div style={{ position:'absolute', inset:0, background:'#f6f2ea', color:'#29261b', overflow:'hidden' }}>
+        <div style={{ position:'absolute', inset:0, overflowY:'auto', overflowX:'hidden', WebkitOverflowScrolling:'touch' }}>
+          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)}/>}
+          {tab==='erfolge'&&<ErfolgeScreen stats={stats} badges={badges}/>}
+          {tab==='jahr'&&<JahrScreen stats={stats} badges={badges} accent={appData.accent} year={year} levels={activeLevels}/>}
+        </div>
+        <BottomNav tab={tab} setTab={setTab}/>
+        {checkinActive&&<CheckinMoment motion={motion} total={stats.total+(checkedInToday?0:1)} todayDate={TODAY} accent={appData.accent} onDone={onCheckinDone}/>}
+        {onboardingActive&&<Onboarding accent={appData.accent} onDone={(goal)=>{ setGoal(goal); localStorage.setItem('sb-onboarded','1'); setAppData((d)=>({...d,onboarded:true,goal})); setOnboardingActive(false); }}/>}
+        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} onClose={()=>setNachtragenOpen(false)}/>}
+        {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
+      </div>
+
+      <TweaksPanel title="Tweaks">
+        <TweakSection label="Stil">
+          <TweakColor label="Akzent" value={appData.accent} options={ACCENT_OPTIONS} onChange={setAccent}/>
+        </TweakSection>
+        <TweakSection label="Visualisierung">
+          <TweakRadio label="Ansicht" value={viz} options={[{value:'heat',label:'Jahr'},{value:'month',label:'Monat'}]} onChange={setViz}/>
+          <TweakSlider label="Jahresziel" value={appData.goal} min={10} max={120} step={5} unit=" Bes." onChange={setGoal}/>
+        </TweakSection>
+        <TweakSection label="Check-in">
+          <TweakRadio label="Animation" value={motion} options={[{value:'stamp',label:'Stempel'},{value:'fill',label:'Füllen'},{value:'rustle',label:'Rascheln'}]} onChange={setMotion}/>
+        </TweakSection>
+        {years.length>1&&(
+          <TweakSection label="Jahr">
+            <TweakRadio label="Anzeigen" value={year} options={years.map((y)=>({value:y,label:String(y)}))} onChange={setYear}/>
+          </TweakSection>
+        )}
+        <TweakSection label="Tage nachtragen">
+          <DayEditor year={year} checkins={appData.checkins} accent={appData.accent} onToggle={toggleDay}/>
+        </TweakSection>
+        <TweakSection label="Daten">
+          <TweakButton label="Backup sichern (Download)" secondary onClick={exportData}/>
+          <TweakButton label="Backup laden" secondary onClick={()=>fileInputRef.current&&fileInputRef.current.click()}/>
+          <TweakToggle label="Demo-Daten anzeigen" value={showDemo} onChange={setShowDemo}/>
+          <TweakButton label={`${year} zurücksetzen`} secondary onClick={resetAll}/>
+        </TweakSection>
+      </TweaksPanel>
+    </IOSDevice>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js');
+    }
+  </script>
+</body>
+</html>
