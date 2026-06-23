@@ -4,7 +4,7 @@
   "description": "Dein Boulder-Jahressammelbuch",
   "start_url": "./Sammelbuch.html",
   "display": "standalone",
-  "background_color": "#e7e9e3",
+  "background_color": "#ffffff",
   "theme_color": "#29261b",
   "lang": "de",
   "icons": [

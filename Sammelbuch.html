@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..600&display=swap" rel="stylesheet">
   <style>
-    html, body { margin: 0; padding: 0; background: #e7e9e3; font-family: system-ui, -apple-system, sans-serif; color: #29261b; min-height: 100vh; }
+    html, body { margin: 0; padding: 0; background: #ffffff; font-family: system-ui, -apple-system, sans-serif; color: #29261b; min-height: 100vh; }
     body { display: block; padding: 0; box-sizing: border-box; }
     #root { display: block; }
     body::before {
@@ -24,7 +24,7 @@
       background-size: 4px 4px, 7px 7px; background-position: 0 0, 2px 3px; opacity: 0.6; z-index: 0;
     }
     #loading {
-      position: fixed; inset: 0; z-index: 9999; background: #e7e9e3;
+      position: fixed; inset: 0; z-index: 9999; background: #ffffff;
       display: flex; align-items: center; justify-content: center;
       font-family: 'Newsreader', Georgia, serif; font-size: 18px; font-style: italic;
       color: rgba(41,38,27,0.55); letter-spacing: 0.02em; pointer-events: none;
@@ -62,7 +62,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v11';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v12';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 function toRoman(n) {
   const map=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
@@ -242,7 +242,7 @@ function earnedBadges(stats) {
 // auf eine Telefon-Spaltenbreite zentriert. Kein Fake-Geräterahmen mehr.
 function IOSDevice({ children }) {
   return (
-    <div style={{ width:'100%', maxWidth:480, minHeight:'100dvh', margin:'0 auto', position:'relative', overflow:'hidden', background:'#eef1ec', boxShadow:'0 0 80px rgba(0,0,0,0.12)', fontFamily:'-apple-system,system-ui,sans-serif', WebkitFontSmoothing:'antialiased' }}>
+    <div style={{ width:'100%', maxWidth:480, minHeight:'100dvh', margin:'0 auto', position:'relative', overflow:'hidden', background:'#ffffff', boxShadow:'0 0 80px rgba(0,0,0,0.12)', fontFamily:'-apple-system,system-ui,sans-serif', WebkitFontSmoothing:'antialiased' }}>
       {children}
     </div>
   );
@@ -917,7 +917,7 @@ function Onboarding({ onDone, accent }) {
   ];
   const s=slides[step];
   return (
-    <div style={{ position:'absolute', inset:0, zIndex:100, background:'#eef1ec', display:'flex', flexDirection:'column', padding:'54px 28px 36px' }}>
+    <div style={{ position:'absolute', inset:0, zIndex:100, background:'#ffffff', display:'flex', flexDirection:'column', padding:'54px 28px 36px' }}>
       <div style={{ display:'flex', gap:6, marginTop:16 }}>
         {slides.map((_,i)=><div key={i} style={{ flex:1, height:2, background:i<=step?'#29261b':'rgba(41,38,27,0.15)', borderRadius:1, transition:'background .25s' }}/>)}
       </div>
@@ -1037,7 +1037,7 @@ function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLe
 function LevelPrompt({ accent, currentLevel='normal', onPick, onClose }) {
   return (
     <div onClick={onClose} style={{ position:'absolute', inset:0, zIndex:210, background:'rgba(41,38,27,0.28)', display:'flex', flexDirection:'column', justifyContent:'flex-end' }}>
-      <div onClick={(e)=>e.stopPropagation()} style={{ background:'#eef1ec', borderTopLeftRadius:24, borderTopRightRadius:24, padding:'22px 22px calc(env(safe-area-inset-bottom) + 24px)', boxShadow:'0 -10px 40px rgba(41,38,27,0.22)' }}>
+      <div onClick={(e)=>e.stopPropagation()} style={{ background:'#ffffff', borderTopLeftRadius:24, borderTopRightRadius:24, padding:'22px 22px calc(env(safe-area-inset-bottom) + 24px)', boxShadow:'0 -10px 40px rgba(41,38,27,0.22)' }}>
         <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
           <div style={{ fontFamily:'Newsreader,serif', fontSize:22, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em' }}>Wie war heute?</div>
           <button onClick={onClose} style={{ appearance:'none', border:0, background:'transparent', color:'rgba(41,38,27,0.5)', fontSize:13, fontFamily:'system-ui', cursor:'pointer' }}>überspringen</button>
@@ -1237,7 +1237,7 @@ function App() {
     <IOSDevice>
       <input ref={fileInputRef} type="file" accept="application/json,.json" style={{display:'none'}}
         onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if (f) importData(f); e.target.value=''; }}/>
-      <div style={{ position:'absolute', inset:0, background:'#eef1ec', color:'#29261b', overflow:'hidden' }}>
+      <div style={{ position:'absolute', inset:0, background:'#ffffff', color:'#29261b', overflow:'hidden' }}>
         <div style={{ position:'absolute', inset:0, overflowY:'auto', overflowX:'hidden', WebkitOverflowScrolling:'touch' }}>
           {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)}/>}
           {tab==='erfolge'&&<ErfolgeScreen stats={stats} badges={badges}/>}
