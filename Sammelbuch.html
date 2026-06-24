@@ -64,6 +64,58 @@ const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt auto
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
 const APP_VERSION = 'v12';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
+// ── Cloud-Sync (optional) ─────────────────────────────────────
+// Leer lassen = reiner localStorage-Betrieb (wie bisher). Werte aus Supabase → Settings → API.
+// Siehe SETUP-supabase.md.
+const SUPABASE_URL = '';
+const SUPABASE_ANON_KEY = '';
+const CLOUD_ENABLED = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+let __supa = null;
+async function getSupa() {
+  if (!CLOUD_ENABLED) return null;
+  if (__supa) return __supa;
+  if (!window.supabase) {
+    await new Promise((res, rej) => { const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'; s.onload=res; s.onerror=rej; document.head.appendChild(s); });
+  }
+  __supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth:{ persistSession:true, detectSessionInUrl:true } });
+  return __supa;
+}
+async function __uid(sb){ const { data } = await sb.auth.getUser(); return data && data.user ? data.user.id : null; }
+
+// Cloud → localStorage spiegeln (alle Jahre). true, wenn die Cloud schon Daten hatte.
+async function cloudPull() {
+  const sb = await getSupa(); if (!sb) return false;
+  const [{ data:rows }, { data:prof }] = await Promise.all([
+    sb.from('checkins').select('day,level'),
+    sb.from('profiles').select('goal,accent,onboarded').maybeSingle(),
+  ]);
+  for (let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if (k && /^sb-(checkins|levels)-\d{4}$/.test(k)) localStorage.removeItem(k); }
+  const byYear={}, lvlByYear={};
+  (rows||[]).forEach(({day,level})=>{ const y=String(day).slice(0,4); (byYear[y]=byYear[y]||[]).push(day); if (level && level!=='normal') (lvlByYear[y]=lvlByYear[y]||{})[day]=level; });
+  Object.entries(byYear).forEach(([y,days])=>localStorage.setItem(`sb-checkins-${y}`, JSON.stringify(days.sort())));
+  Object.entries(lvlByYear).forEach(([y,m])=>localStorage.setItem(`sb-levels-${y}`, JSON.stringify(m)));
+  if (prof){ localStorage.setItem('sb-goal', JSON.stringify(prof.goal)); localStorage.setItem('sb-accent', prof.accent); if (prof.onboarded) localStorage.setItem('sb-onboarded','1'); }
+  return (!!rows && rows.length>0) || !!prof;
+}
+
+// localStorage → Cloud (einmalige Migration, wenn Cloud leer war)
+async function cloudPushAll() {
+  const sb = await getSupa(); if (!sb) return;
+  const id = await __uid(sb); if (!id) return;
+  const rows=[];
+  for (let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); const m=k&&k.match(/^sb-checkins-(\d{4})$/); if (m){ const y=m[1]; const days=JSON.parse(localStorage.getItem(k)||'[]'); const lv=JSON.parse(localStorage.getItem(`sb-levels-${y}`)||'{}'); days.forEach((day)=>rows.push({ user_id:id, day, level: lv[day]||'normal' })); } }
+  if (rows.length) await sb.from('checkins').upsert(rows, { onConflict:'user_id,day' });
+  const goal=JSON.parse(localStorage.getItem('sb-goal')||'40'), accent=localStorage.getItem('sb-accent')||'#6b6862', onboarded=!!localStorage.getItem('sb-onboarded');
+  await sb.from('profiles').upsert({ user_id:id, goal, accent, onboarded }, { onConflict:'user_id' });
+}
+
+// Einzel-Operationen (fire-and-forget aus dem UI; Fehler werden geschluckt, localStorage bleibt Quelle)
+async function cloudUpsertCheckin(iso, level){ try{ const sb=await getSupa(); if(!sb) return; const id=await __uid(sb); if(!id) return; await sb.from('checkins').upsert({ user_id:id, day:iso, level:level||'normal' }, { onConflict:'user_id,day' }); }catch(e){ console.warn('cloud upsert', e); } }
+async function cloudDeleteCheckin(iso){ try{ const sb=await getSupa(); if(!sb) return; await sb.from('checkins').delete().eq('day', iso); }catch(e){ console.warn('cloud delete', e); } }
+async function cloudDeleteYear(year){ try{ const sb=await getSupa(); if(!sb) return; await sb.from('checkins').delete().gte('day', `${year}-01-01`).lte('day', `${year}-12-31`); }catch(e){ console.warn('cloud delyear', e); } }
+async function cloudSaveProfile(patch){ try{ const sb=await getSupa(); if(!sb) return; const id=await __uid(sb); if(!id) return; await sb.from('profiles').upsert({ user_id:id, ...patch }, { onConflict:'user_id' }); }catch(e){ console.warn('cloud profile', e); } }
+
 function toRoman(n) {
   const map=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
   let r=''; for (const [v,s] of map) { while (n>=v) { r+=s; n-=v; } } return r;
@@ -1110,6 +1162,43 @@ function loadAppData() {
   } catch { return { checkins:[], levels:{}, goal:40, accent:'#6b6862', onboarded:false }; }
 }
 
+// Login per Magic-Link (nur wenn Cloud aktiv und nicht eingeloggt)
+function CloudAuth({ accent }) {
+  const [email, setEmail]=React.useState('');
+  const [sent, setSent]=React.useState(false);
+  const [err, setErr]=React.useState('');
+  const [busy, setBusy]=React.useState(false);
+  const send=async()=>{
+    if (!email || busy) return; setBusy(true); setErr('');
+    try {
+      const sb=await getSupa();
+      const { error }=await sb.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.href.split('#')[0] } });
+      if (error) throw error;
+      setSent(true);
+    } catch(e){ setErr(e.message||'Fehler beim Senden.'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ position:'absolute', inset:0, zIndex:300, background:'#ffffff', display:'flex', flexDirection:'column', justifyContent:'center', padding:'40px 30px calc(env(safe-area-inset-bottom) + 40px)' }}>
+      <div style={{ fontSize:12, letterSpacing:'.16em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Sammelbuch · Cloud</div>
+      <div style={{ fontFamily:'Newsreader,serif', fontSize:36, fontWeight:400, color:'#29261b', letterSpacing:'-0.02em', lineHeight:1.1, marginTop:12 }}>Anmelden</div>
+      <div style={{ fontFamily:'Newsreader,serif', fontSize:16, fontStyle:'italic', color:'rgba(41,38,27,0.6)', lineHeight:1.5, marginTop:14, maxWidth:330 }}>
+        {sent ? 'Check deine Mails — wir haben dir einen Anmelde-Link geschickt. Öffne ihn auf diesem Gerät.'
+              : 'Damit deine Boulder-Tage auf allen Geräten landen. Du bekommst einen Link per E-Mail — kein Passwort nötig.'}
+      </div>
+      {!sent && (
+        <>
+          <input type="email" inputMode="email" autoCapitalize="off" autoCorrect="off" placeholder="deine@email.ch" value={email}
+            onChange={(e)=>setEmail(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') send(); }}
+            style={{ marginTop:24, padding:'15px 16px', fontSize:16, fontFamily:'system-ui', border:'0.5px solid rgba(41,38,27,0.25)', borderRadius:14, background:'#fbf8f1', color:'#29261b', outline:'none' }}/>
+          {err && <div style={{ color:'#b3543a', fontSize:13, marginTop:8, fontFamily:'system-ui' }}>{err}</div>}
+          <button onClick={send} disabled={busy} style={{ marginTop:14, padding:'16px 24px', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:18, fontWeight:500, cursor:busy?'default':'pointer', opacity:busy?0.6:1 }}>{busy?'…':'Link senden'}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [tab, setTab]=React.useState('sammeln');
   const [viz, setViz]=React.useState('heat');
@@ -1121,6 +1210,8 @@ function App() {
   const [onboardingActive, setOnboardingActive]=React.useState(!loadAppData().onboarded);
   const [nachtragenOpen, setNachtragenOpen]=React.useState(false);
   const [levelPromptISO, setLevelPromptISO]=React.useState(null);  // Tag, für den nach dem Stempeln die Stufe abgefragt wird
+  const [cloudUser, setCloudUser]=React.useState(null);   // eingeloggter Supabase-User (null = offline/localStorage)
+  const [cloudBusy, setCloudBusy]=React.useState(CLOUD_ENABLED);  // initialer Sync läuft
   const fileInputRef=React.useRef(null);
 
   // Remove loading indicator once React has mounted
@@ -1128,6 +1219,30 @@ function App() {
 
   // Check-ins & Level neu laden, wenn das angezeigte Jahr wechselt
   React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year)})); },[year]);
+
+  // Cloud-Sync: bei Login Daten ziehen (oder beim ersten Mal hochmigrieren), dann lokale Ansicht neu laden
+  React.useEffect(()=>{
+    if (!CLOUD_ENABLED) return;
+    let active=true;
+    (async()=>{
+      const sb=await getSupa(); if(!sb||!active) return;
+      const applySession=async(session)=>{
+        if (!active) return;
+        if (session && session.user) {
+          setCloudUser(session.user);
+          try { const had=await cloudPull(); if(!had) await cloudPushAll(); } catch(e){ console.warn('cloud sync', e); }
+          if (!active) return;
+          setAppData({ ...loadAppData(), checkins: loadCheckins(year), levels: loadLevels(year) });
+          setOnboardingActive(!localStorage.getItem('sb-onboarded'));
+        } else { setCloudUser(null); }
+        setCloudBusy(false);
+      };
+      const { data:{ session } } = await sb.auth.getSession();
+      await applySession(session);
+      sb.auth.onAuthStateChange((_e, s)=>{ applySession(s); });
+    })();
+    return ()=>{ active=false; };
+  },[]);  // eslint: nur beim Mount
 
   const todayISO=isoDay(TODAY);
 
@@ -1148,6 +1263,7 @@ function App() {
       const next=[...new Set([...appData.checkins,todayISO])];
       localStorage.setItem(`sb-checkins-${YEAR}`,JSON.stringify(next));
       setAppData((d)=>({...d,checkins:next}));
+      if (cloudUser) cloudUpsertCheckin(todayISO,'normal');
       setLevelPromptISO(todayISO);   // optionale Stufen-Rückfrage einblenden
     }
   };
@@ -1159,15 +1275,18 @@ function App() {
     if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map));
     else localStorage.removeItem(`sb-levels-${year}`);
     setAppData((d)=>({...d,levels:map}));
+    if (cloudUser) cloudUpsertCheckin(iso, level);
   };
 
   const setGoal=(goal)=>{
     localStorage.setItem('sb-goal',JSON.stringify(goal));
     setAppData((d)=>({...d,goal}));
+    if (cloudUser) cloudSaveProfile({ goal });
   };
   const setAccent=(accent)=>{
     localStorage.setItem('sb-accent',accent);
     setAppData((d)=>({...d,accent}));
+    if (cloudUser) cloudSaveProfile({ accent });
   };
   // Einzelnen Tag im angezeigten Jahr nachtragen/löschen
   const toggleDay=(iso)=>{
@@ -1182,6 +1301,7 @@ function App() {
       if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map)); else localStorage.removeItem(`sb-levels-${year}`);
     }
     setAppData((d)=>({...d,checkins:next,levels:map}));
+    if (cloudUser) { if (removing) cloudDeleteCheckin(iso); else cloudUpsertCheckin(iso,'normal'); }
   };
 
   // Backup: alle sb-* Schlüssel als JSON-Datei herunterladen
@@ -1220,6 +1340,7 @@ function App() {
     if (!confirm(`Wirklich alle Daten für ${year} zurücksetzen? Mach vorher ein Backup.`)) return;
     localStorage.removeItem(`sb-checkins-${year}`);
     localStorage.removeItem(`sb-levels-${year}`);
+    if (cloudUser) cloudDeleteYear(year);
     if (year===YEAR) {
       localStorage.removeItem('sb-goal');
       localStorage.removeItem('sb-accent');
@@ -1245,9 +1366,13 @@ function App() {
         </div>
         <BottomNav tab={tab} setTab={setTab}/>
         {checkinActive&&<CheckinMoment motion={motion} total={stats.total+(checkedInToday?0:1)} todayDate={TODAY} accent={appData.accent} onDone={onCheckinDone}/>}
-        {onboardingActive&&<Onboarding accent={appData.accent} onDone={(goal)=>{ setGoal(goal); localStorage.setItem('sb-onboarded','1'); setAppData((d)=>({...d,onboarded:true,goal})); setOnboardingActive(false); }}/>}
+        {onboardingActive&&<Onboarding accent={appData.accent} onDone={(goal)=>{ setGoal(goal); localStorage.setItem('sb-onboarded','1'); setAppData((d)=>({...d,onboarded:true,goal})); setOnboardingActive(false); if (cloudUser) cloudSaveProfile({ onboarded:true }); }}/>}
         {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} onClose={()=>setNachtragenOpen(false)}/>}
         {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
+        {CLOUD_ENABLED && cloudBusy && (
+          <div style={{ position:'absolute', inset:0, zIndex:300, background:'#ffffff', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:18, color:'rgba(41,38,27,0.55)' }}>Synchronisiere…</div>
+        )}
+        {CLOUD_ENABLED && !cloudBusy && !cloudUser && <CloudAuth accent={appData.accent}/>}
       </div>
 
       <TweaksPanel title="Tweaks">
@@ -1275,6 +1400,12 @@ function App() {
           <TweakToggle label="Demo-Daten anzeigen" value={showDemo} onChange={setShowDemo}/>
           <TweakButton label={`${year} zurücksetzen`} secondary onClick={resetAll}/>
         </TweakSection>
+        {CLOUD_ENABLED && cloudUser && (
+          <TweakSection label="Konto">
+            <div style={{ fontSize:11, color:'rgba(41,38,27,0.6)', wordBreak:'break-all', marginBottom:6 }}>{cloudUser.email||'angemeldet'}</div>
+            <TweakButton label="Abmelden" secondary onClick={async()=>{ const sb=await getSupa(); if(sb){ await sb.auth.signOut(); setCloudUser(null); } }}/>
+          </TweakSection>
+        )}
       </TweaksPanel>
     </IOSDevice>
   );
