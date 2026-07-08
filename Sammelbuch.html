@@ -55,6 +55,7 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script type="text/babel">
 
 // ─────────────────────────────────────────────────────────────
@@ -62,7 +63,86 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v12';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v13';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+
+// ── Supabase (Cloud-Sync + Login) ──
+const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_emWxaAYz8pR6ALmN2pk36Q_37vJ1FXW';
+const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function dbCurrentUser() {
+  const { data: { user } } = await supa.auth.getUser();
+  return user;
+}
+async function dbLoadYear(year) {
+  const [ciRes, rtRes] = await Promise.all([
+    supa.from('check_ins').select('date,level').eq('year', year),
+    supa.from('routes').select('date,y,g,o,b,r,w,bl,p').eq('year', year),
+  ]);
+  if (ciRes.error) throw ciRes.error;
+  if (rtRes.error) throw rtRes.error;
+  const checkins = (ciRes.data || []).map((r) => r.date).sort();
+  const levels = {};
+  (ciRes.data || []).forEach((r) => { if (r.level && r.level !== 'normal') levels[r.date] = r.level; });
+  const routes = {};
+  (rtRes.data || []).forEach((r) => {
+    const { date, ...counts } = r;
+    const nz = Object.fromEntries(Object.entries(counts).filter(([, v]) => v > 0));
+    if (Object.keys(nz).length) routes[date] = nz;
+  });
+  return { checkins, levels, routes };
+}
+async function dbUpsertCheckin(date, year, level = 'normal') {
+  const user = await dbCurrentUser(); if (!user) return;
+  return supa.from('check_ins').upsert({ user_id: user.id, date, year, level }, { onConflict: 'user_id,date' });
+}
+async function dbDeleteCheckin(date) {
+  const user = await dbCurrentUser(); if (!user) return;
+  return supa.from('check_ins').delete().eq('user_id', user.id).eq('date', date);
+}
+async function dbUpsertRoutes(date, year, counts = {}) {
+  const user = await dbCurrentUser(); if (!user) return;
+  const row = { user_id: user.id, date, year, y: 0, g: 0, o: 0, b: 0, r: 0, w: 0, bl: 0, p: 0, ...counts };
+  return supa.from('routes').upsert(row, { onConflict: 'user_id,date' });
+}
+async function dbLoadSettings() {
+  const { data, error } = await supa.from('user_settings').select('goal,accent,buddy_name').maybeSingle();
+  if (error) return null;
+  return data;
+}
+async function dbSaveSettings({ goal, accent, buddy_name }) {
+  const user = await dbCurrentUser(); if (!user) return;
+  return supa.from('user_settings').upsert({ user_id: user.id, goal, accent, buddy_name }, { onConflict: 'user_id' });
+}
+async function dbLoadBuddyWeeks(year) {
+  const { data, error } = await supa.from('buddy_weeks').select('week_key').like('week_key', `${year}-W%`);
+  if (error) return [];
+  return (data || []).map((r) => r.week_key).sort();
+}
+async function dbToggleBuddyWeek(weekKey, on) {
+  const user = await dbCurrentUser(); if (!user) return;
+  if (on) return supa.from('buddy_weeks').upsert({ user_id: user.id, week_key: weekKey }, { onConflict: 'user_id,week_key' });
+  return supa.from('buddy_weeks').delete().eq('user_id', user.id).eq('week_key', weekKey);
+}
+// Einmalige Migration: bestehende localStorage-Daten in die Cloud schreiben, falls dort noch nichts liegt
+async function dbMigrateLocal() {
+  const user = await dbCurrentUser(); if (!user) return;
+  const { count } = await supa.from('check_ins').select('*', { count: 'exact', head: true });
+  if (count && count > 0) return;   // Cloud hat schon Daten — nicht überschreiben
+  for (const y of availableYears()) {
+    const checkins = loadCheckins(y);
+    const levels = loadLevels(y);
+    for (const iso of checkins) { await dbUpsertCheckin(iso, y, levels[iso] || 'normal'); }
+    const routes = loadRoutes(y);
+    for (const [iso, counts] of Object.entries(routes)) { await dbUpsertRoutes(iso, y, counts); }
+    for (const wk of loadBuddyWeeks(y)) { await dbToggleBuddyWeek(wk, true); }
+  }
+  await dbSaveSettings({
+    goal: JSON.parse(localStorage.getItem('sb-goal') || '40'),
+    accent: localStorage.getItem('sb-accent') || '#6b6862',
+    buddy_name: localStorage.getItem('sb-buddy-name') || '',
+  });
+}
 
 function toRoman(n) {
   const map=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
@@ -78,6 +158,24 @@ function loadCheckins(year) {
 function loadLevels(year) {
   try { return JSON.parse(localStorage.getItem(`sb-levels-${year}`) || '{}'); } catch { return {}; }
 }
+// Routen-Farbzählung pro Tag (sparse map: iso -> {y,g,o,b,r,w,bl,p})
+function loadRoutes(year) {
+  try { return JSON.parse(localStorage.getItem(`sb-routes-${year}`) || '{}'); } catch { return {}; }
+}
+// Wochen, in denen mit Buddy gebouldert wurde (Array von week_key, z.B. "2026-W05")
+function loadBuddyWeeks(year) {
+  try { return JSON.parse(localStorage.getItem(`sb-buddy-${year}`) || '[]'); } catch { return []; }
+}
+const ROUTE_COLORS = [
+  { k:'y',  label:'Gelb',    hex:'#e3c23c' },
+  { k:'g',  label:'Grün',    hex:'#5f8a4a' },
+  { k:'o',  label:'Orange',  hex:'#d3792f' },
+  { k:'b',  label:'Blau',    hex:'#3f6ea8' },
+  { k:'r',  label:'Rot',     hex:'#b3413a' },
+  { k:'w',  label:'Weiss',   hex:'#e9e4d6' },
+  { k:'bl', label:'Schwarz', hex:'#2b2925' },
+  { k:'p',  label:'Pink',    hex:'#b95a9c' },
+];
 
 // ── Farben: Akzent zu 'leicht' (heller, Richtung Papier) / 'stark' (dunkler, Richtung Tinte) mischen ──
 const PAPER='#f6f2ea', INK='#29261b';
@@ -180,6 +278,12 @@ function isoWeek(d) {
   t.setDate(t.getDate() + 3 - ((t.getDay()+6)%7));
   const w1 = new Date(t.getFullYear(),0,4);
   return 1 + Math.round(((t-w1)/86400000 - 3 + ((w1.getDay()+6)%7))/7);
+}
+// ISO-Wochenschlüssel ("2026-W05") — Buddy-Wochen sind an die ISO-Woche gebunden, nicht an einen einzelnen Tag
+function isoWeekKey(d) {
+  const t = new Date(d.valueOf()); t.setHours(0,0,0,0);
+  t.setDate(t.getDate() + 3 - ((t.getDay()+6)%7));
+  return `${t.getFullYear()}-W${String(isoWeek(d)).padStart(2,'0')}`;
 }
 function isWinter(d) { const m = d.getMonth(); return m===11||m===0||m===1; }
 function dateFmtShort(d) { return d.toLocaleDateString('de-CH',{day:'2-digit',month:'short'}); }
@@ -415,6 +519,16 @@ function TweakButton({ label, onClick, secondary=false }) {
   return <button type="button" className={secondary?'twk-btn secondary':'twk-btn'} onClick={onClick}>{label}</button>;
 }
 
+function TweakInput({ label, value, placeholder, onChange }) {
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <input type="text" value={value} placeholder={placeholder} onChange={(e)=>onChange(e.target.value)}
+        style={{ width:'100%', boxSizing:'border-box', padding:'6px 8px', borderRadius:8, border:'0.5px solid rgba(41,38,27,0.18)', background:'rgba(255,255,255,0.6)', fontFamily:'inherit', fontSize:11.5, color:'#29261b' }}/>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // BADGE EMBLEMS
 // ─────────────────────────────────────────────────────────────
@@ -571,7 +685,30 @@ function VizHeatmap({ stats, accent, todayISO, year=YEAR, levels={} }) {
   );
 }
 
-function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel }) {
+// Farbzählung der Routen eines Tages — Stepper pro Farbe
+function RouteCounters({ counts={}, onChange }) {
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:6, marginTop:8 }}>
+      {ROUTE_COLORS.map((c)=>{
+        const n=counts[c.k]||0;
+        return (
+          <div key={c.k} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 8px', borderRadius:10, background:'rgba(41,38,27,0.04)', border:'0.5px solid rgba(41,38,27,0.1)' }}>
+            <span style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, fontFamily:'system-ui', color:'#29261b' }}>
+              <span style={{ width:9, height:9, borderRadius:'50%', background:c.hex, boxShadow:'0 0 0 0.5px rgba(41,38,27,0.25)', flexShrink:0 }}/>{c.label}
+            </span>
+            <span style={{ display:'flex', alignItems:'center', gap:4 }}>
+              <button type="button" onClick={()=>onChange(c.k, Math.max(0,n-1))} style={{ width:20, height:20, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.12)', color:'#29261b', fontSize:13, lineHeight:1, cursor:'pointer' }}>–</button>
+              <span style={{ width:14, textAlign:'center', fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', fontSize:13 }}>{n}</span>
+              <button type="button" onClick={()=>onChange(c.k, n+1)} style={{ width:20, height:20, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.12)', color:'#29261b', fontSize:13, lineHeight:1, cursor:'pointer' }}>+</button>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek }) {
   const set=new Set(stats.sortedDays);
   const monthNames=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
   const [m,setM]=React.useState(()=> year===YEAR ? new Date().getMonth() : 0);
@@ -647,6 +784,26 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
           </div>
         </div>
       )}
+      {editable && onSetRoutes && sel && (
+        <div style={{ marginTop:10, padding:'12px 14px', background:'#fbf8f1', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.12)' }}>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:15, color:'#29261b' }}>Routen</div>
+          <RouteCounters counts={routes[sel]||{}} onChange={(k,v)=>onSetRoutes(sel,k,v)}/>
+        </div>
+      )}
+      {editable && onToggleBuddyWeek && sel && (()=>{
+        const wk=isoWeekKey(parseISO(sel));
+        const isBuddy=buddyWeeks.includes(wk);
+        return (
+          <div style={{ marginTop:10, padding:'12px 14px', background:'#fbf8f1', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.12)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+            <span style={{ fontFamily:'system-ui', fontSize:13, color:'#29261b' }}>Mit Buddy diese Woche</span>
+            <button type="button" onClick={()=>onToggleBuddyWeek(wk,!isBuddy)}
+              style={{ padding:'7px 14px', borderRadius:999, border:isBuddy?`1px solid ${accent}`:'0.5px solid rgba(41,38,27,0.2)',
+                background:isBuddy?accent:'rgba(41,38,27,0.04)', color:isBuddy?'#f6f0e1':'#29261b', fontSize:13, fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>
+              {isBuddy?'✓ Ja':'Nein'}
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1012,7 +1169,7 @@ function CheckinMoment({ motion, total, todayDate, accent, onDone }) {
 const ACCENT_OPTIONS = ['#6b6862','#6b7a4b','#b3543a','#4a5a6a'];
 
 // Vollbild-Dialog zum Nachtragen vergangener Tage (nutzt die editierbare Monatsansicht)
-function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, onClose }) {
+function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, onClose }) {
   return (
     <div style={{ position:'absolute', inset:0, zIndex:150, background:'rgba(246,242,234,0.98)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', display:'flex', flexDirection:'column', padding:'calc(env(safe-area-inset-top) + 28px) 22px calc(env(safe-area-inset-bottom) + 24px)', overflowY:'auto' }}>
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
@@ -1026,7 +1183,7 @@ function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLe
         Tippe einen Tag an — er wird gestempelt. Nochmal tippen entfernt ihn wieder.
       </div>
       <div style={{ marginTop:8 }}>
-        <VizMonth stats={{ sortedDays: checkins }} accent={accent} todayISO={isoDay(TODAY)} year={year} levels={levels} onToggle={onToggle} onSetLevel={onSetLevel}/>
+        <VizMonth stats={{ sortedDays: checkins }} accent={accent} todayISO={isoDay(TODAY)} year={year} levels={levels} onToggle={onToggle} onSetLevel={onSetLevel} routes={routes} onSetRoutes={onSetRoutes} buddyWeeks={buddyWeeks} onToggleBuddyWeek={onToggleBuddyWeek}/>
       </div>
       <button onClick={onClose} style={{ marginTop:'auto', padding:'16px 24px', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:18, fontWeight:500, cursor:'pointer', boxShadow:'0 12px 30px rgba(41,38,27,0.18)' }}>Fertig</button>
     </div>
@@ -1055,6 +1212,48 @@ function LevelPrompt({ accent, currentLevel='normal', onPick, onClose }) {
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Login-Overlay: Magic Link per E-Mail (kein Passwort)
+function AuthCard({ onClose }) {
+  const [email, setEmail]=React.useState('');
+  const [sent, setSent]=React.useState(false);
+  const [busy, setBusy]=React.useState(false);
+  const [error, setError]=React.useState('');
+  const submit=async(e)=>{
+    e.preventDefault();
+    if (!email || busy) return;
+    setBusy(true); setError('');
+    try {
+      const { error } = await supa.auth.signInWithOtp({ email, options:{ emailRedirectTo: window.location.href } });
+      if (error) throw error;
+      setSent(true);
+    } catch (err) { setError(err && err.message ? err.message : 'Anmeldung fehlgeschlagen.'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ position:'absolute', inset:0, zIndex:220, background:'rgba(41,38,27,0.4)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ width:'100%', maxWidth:320, background:'#ffffff', borderRadius:22, padding:'26px 24px', boxShadow:'0 18px 50px rgba(41,38,27,0.25)', position:'relative' }}>
+        <button onClick={onClose} aria-label="Schließen" style={{ position:'absolute', top:14, right:14, width:30, height:30, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.08)', color:'#29261b', fontSize:13, cursor:'pointer' }}>✕</button>
+        {!sent ? (
+          <form onSubmit={submit}>
+            <div style={{ fontFamily:'Newsreader,serif', fontSize:24, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em' }}>Anmelden</div>
+            <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:13, color:'rgba(41,38,27,0.6)', marginTop:4, lineHeight:1.4 }}>Wir senden dir einen Magic Link — kein Passwort nötig.</div>
+            <input type="email" required autoFocus placeholder="deine@email.ch" value={email} onChange={(e)=>setEmail(e.target.value)}
+              style={{ width:'100%', boxSizing:'border-box', marginTop:18, padding:'12px 14px', borderRadius:12, border:'0.5px solid rgba(41,38,27,0.2)', fontFamily:'system-ui', fontSize:15, color:'#29261b', background:'rgba(41,38,27,0.03)' }}/>
+            {error && <div style={{ fontFamily:'system-ui', fontSize:12, color:'#b3543a', marginTop:8 }}>{error}</div>}
+            <button type="submit" disabled={busy} style={{ width:'100%', marginTop:16, padding:'14px 0', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:14, fontFamily:'system-ui', fontSize:14, fontWeight:600, cursor:busy?'default':'pointer', opacity:busy?0.6:1 }}>{busy?'Sende…':'Magic Link senden'}</button>
+          </form>
+        ) : (
+          <div>
+            <div style={{ fontFamily:'Newsreader,serif', fontSize:24, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em' }}>Prüfe deine Mails</div>
+            <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:14, color:'rgba(41,38,27,0.6)', marginTop:8, lineHeight:1.4 }}>Wir haben einen Anmeldelink an <b style={{ fontStyle:'normal' }}>{email}</b> geschickt. Link antippen, um dich anzumelden.</div>
+            <button onClick={onClose} style={{ width:'100%', marginTop:20, padding:'12px 0', background:'transparent', border:'0.5px solid rgba(41,38,27,0.25)', borderRadius:14, fontFamily:'system-ui', fontSize:14, fontWeight:500, color:'#29261b', cursor:'pointer' }}>Schließen</button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1103,11 +1302,14 @@ function loadAppData() {
     return {
       checkins: JSON.parse(localStorage.getItem(`sb-checkins-${YEAR}`) || '[]'),
       levels: loadLevels(YEAR),
+      routes: loadRoutes(YEAR),
+      buddyWeeks: loadBuddyWeeks(YEAR),
       goal: JSON.parse(localStorage.getItem('sb-goal') || '40'),
       accent: localStorage.getItem('sb-accent') || '#6b6862',
+      buddyName: localStorage.getItem('sb-buddy-name') || '',
       onboarded: !!localStorage.getItem('sb-onboarded'),
     };
-  } catch { return { checkins:[], levels:{}, goal:40, accent:'#6b6862', onboarded:false }; }
+  } catch { return { checkins:[], levels:{}, routes:{}, buddyWeeks:[], goal:40, accent:'#6b6862', buddyName:'', onboarded:false }; }
 }
 
 function App() {
@@ -1121,13 +1323,68 @@ function App() {
   const [onboardingActive, setOnboardingActive]=React.useState(!loadAppData().onboarded);
   const [nachtragenOpen, setNachtragenOpen]=React.useState(false);
   const [levelPromptISO, setLevelPromptISO]=React.useState(null);  // Tag, für den nach dem Stempeln die Stufe abgefragt wird
+  const [supaUser, setSupaUser]=React.useState(null);
+  const [syncState, setSyncState]=React.useState('idle');   // idle | syncing | synced | error
+  const [authOpen, setAuthOpen]=React.useState(false);
   const fileInputRef=React.useRef(null);
+  const yearRef=React.useRef(year);
+  React.useEffect(()=>{ yearRef.current=year; },[year]);
 
   // Remove loading indicator once React has mounted
   React.useEffect(() => { document.getElementById('loading')?.remove(); }, []);
 
+  // Cloud-Stand für ein Jahr laden und als lokalen Cache (localStorage) + State übernehmen
+  const syncFromCloud=React.useCallback(async(y)=>{
+    setSyncState('syncing');
+    try {
+      const [{ checkins, levels, routes }, settings, buddyWeeks] = await Promise.all([
+        dbLoadYear(y), dbLoadSettings(), dbLoadBuddyWeeks(y),
+      ]);
+      localStorage.setItem(`sb-checkins-${y}`, JSON.stringify(checkins));
+      if (Object.keys(levels).length) localStorage.setItem(`sb-levels-${y}`, JSON.stringify(levels)); else localStorage.removeItem(`sb-levels-${y}`);
+      if (Object.keys(routes).length) localStorage.setItem(`sb-routes-${y}`, JSON.stringify(routes)); else localStorage.removeItem(`sb-routes-${y}`);
+      if (buddyWeeks.length) localStorage.setItem(`sb-buddy-${y}`, JSON.stringify(buddyWeeks)); else localStorage.removeItem(`sb-buddy-${y}`);
+      if (settings) {
+        if (settings.goal!=null) localStorage.setItem('sb-goal', JSON.stringify(settings.goal));
+        if (settings.accent) localStorage.setItem('sb-accent', settings.accent);
+        localStorage.setItem('sb-buddy-name', settings.buddy_name||'');
+      }
+      localStorage.setItem('sb-onboarded','1');
+      setAppData({
+        checkins: loadCheckins(y), levels: loadLevels(y), routes: loadRoutes(y), buddyWeeks: loadBuddyWeeks(y),
+        goal: JSON.parse(localStorage.getItem('sb-goal')||'40'), accent: localStorage.getItem('sb-accent')||'#6b6862',
+        buddyName: localStorage.getItem('sb-buddy-name')||'', onboarded:true,
+      });
+      setOnboardingActive(false);
+      setSyncState('synced');
+    } catch { setSyncState('error'); }
+  },[]);
+
+  // Login-Status beobachten: bestehende Session laden, bei Anmeldung lokale Daten migrieren + syncen
+  React.useEffect(()=>{
+    let active=true;
+    supa.auth.getSession().then(({ data:{ session } })=>{
+      if (!active) return;
+      const u=session?.user ?? null;
+      setSupaUser(u);
+      if (u) syncFromCloud(yearRef.current);
+    });
+    const { data:sub } = supa.auth.onAuthStateChange((event, session)=>{
+      const u=session?.user ?? null;
+      setSupaUser(u);
+      if (event==='SIGNED_IN' && u) dbMigrateLocal().then(()=>syncFromCloud(yearRef.current));
+    });
+    return ()=>{ active=false; sub.subscription.unsubscribe(); };
+  },[syncFromCloud]);
+
+  // Bei Jahreswechsel, während eingeloggt: Cloud-Stand für das neu gewählte Jahr nachladen
+  React.useEffect(()=>{ if (supaUser) syncFromCloud(year); },[year]);
+
+  // Auth-Overlay automatisch schliessen, sobald die Anmeldung erfolgreich war
+  React.useEffect(()=>{ if (supaUser) setAuthOpen(false); },[supaUser]);
+
   // Check-ins & Level neu laden, wenn das angezeigte Jahr wechselt
-  React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year)})); },[year]);
+  React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year), routes: loadRoutes(year), buddyWeeks: loadBuddyWeeks(year)})); },[year]);
 
   const todayISO=isoDay(TODAY);
 
@@ -1149,6 +1406,7 @@ function App() {
       localStorage.setItem(`sb-checkins-${YEAR}`,JSON.stringify(next));
       setAppData((d)=>({...d,checkins:next}));
       setLevelPromptISO(todayISO);   // optionale Stufen-Rückfrage einblenden
+      if (supaUser) dbUpsertCheckin(todayISO, YEAR, 'normal').catch(()=>setSyncState('error'));
     }
   };
 
@@ -1159,15 +1417,55 @@ function App() {
     if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map));
     else localStorage.removeItem(`sb-levels-${year}`);
     setAppData((d)=>({...d,levels:map}));
+    if (supaUser) dbUpsertCheckin(iso, year, level).catch(()=>setSyncState('error'));
   };
 
+  // Routen-Farbzählung eines Tages ändern (eine Farbe pro Aufruf)
+  const setRouteCounts=(iso, colorKey, value)=>{
+    const map={...loadRoutes(year)};
+    const dayCounts={...(map[iso]||{})};
+    if (value>0) dayCounts[colorKey]=value; else delete dayCounts[colorKey];
+    if (Object.keys(dayCounts).length) map[iso]=dayCounts; else delete map[iso];
+    if (Object.keys(map).length) localStorage.setItem(`sb-routes-${year}`,JSON.stringify(map));
+    else localStorage.removeItem(`sb-routes-${year}`);
+    setAppData((d)=>({...d,routes:map}));
+    if (supaUser) dbUpsertRoutes(iso, year, dayCounts).catch(()=>setSyncState('error'));
+  };
+
+  // Buddy-Woche ein-/ausschalten
+  const toggleBuddyWeek=(weekKey, on)=>{
+    const wYear=weekKey.split('-W')[0];
+    const cur=new Set(loadBuddyWeeks(wYear));
+    if (on) cur.add(weekKey); else cur.delete(weekKey);
+    const next=[...cur].sort();
+    if (next.length) localStorage.setItem(`sb-buddy-${wYear}`,JSON.stringify(next));
+    else localStorage.removeItem(`sb-buddy-${wYear}`);
+    if (Number(wYear)===Number(year)) setAppData((d)=>({...d,buddyWeeks:next}));
+    if (supaUser) dbToggleBuddyWeek(weekKey, on).catch(()=>setSyncState('error'));
+  };
+
+  const pushSettings=(overrides)=>{
+    if (!supaUser) return;
+    dbSaveSettings({
+      goal: overrides.goal ?? appData.goal,
+      accent: overrides.accent ?? appData.accent,
+      buddy_name: overrides.buddyName ?? appData.buddyName,
+    }).catch(()=>setSyncState('error'));
+  };
   const setGoal=(goal)=>{
     localStorage.setItem('sb-goal',JSON.stringify(goal));
     setAppData((d)=>({...d,goal}));
+    pushSettings({goal});
   };
   const setAccent=(accent)=>{
     localStorage.setItem('sb-accent',accent);
     setAppData((d)=>({...d,accent}));
+    pushSettings({accent});
+  };
+  const setBuddyName=(buddyName)=>{
+    localStorage.setItem('sb-buddy-name',buddyName);
+    setAppData((d)=>({...d,buddyName}));
+    pushSettings({buddyName});
   };
   // Einzelnen Tag im angezeigten Jahr nachtragen/löschen
   const toggleDay=(iso)=>{
@@ -1182,6 +1480,10 @@ function App() {
       if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map)); else localStorage.removeItem(`sb-levels-${year}`);
     }
     setAppData((d)=>({...d,checkins:next,levels:map}));
+    if (supaUser) {
+      if (removing) dbDeleteCheckin(iso).catch(()=>setSyncState('error'));
+      else dbUpsertCheckin(iso, year, 'normal').catch(()=>setSyncState('error'));
+    }
   };
 
   // Backup: alle sb-* Schlüssel als JSON-Datei herunterladen
@@ -1246,11 +1548,32 @@ function App() {
         <BottomNav tab={tab} setTab={setTab}/>
         {checkinActive&&<CheckinMoment motion={motion} total={stats.total+(checkedInToday?0:1)} todayDate={TODAY} accent={appData.accent} onDone={onCheckinDone}/>}
         {onboardingActive&&<Onboarding accent={appData.accent} onDone={(goal)=>{ setGoal(goal); localStorage.setItem('sb-onboarded','1'); setAppData((d)=>({...d,onboarded:true,goal})); setOnboardingActive(false); }}/>}
-        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} onClose={()=>setNachtragenOpen(false)}/>}
+        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} routes={appData.routes} onSetRoutes={setRouteCounts} buddyWeeks={appData.buddyWeeks} onToggleBuddyWeek={toggleBuddyWeek} onClose={()=>setNachtragenOpen(false)}/>}
         {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
+        {authOpen&&<AuthCard onClose={()=>setAuthOpen(false)}/>}
       </div>
 
       <TweaksPanel title="Tweaks">
+        <TweakSection label="Synchronisation">
+          {supaUser ? (
+            <>
+              <div className="twk-row">
+                <div className="twk-lbl"><span>Angemeldet als</span></div>
+                <div style={{ fontSize:11, color:'rgba(41,38,27,.7)', wordBreak:'break-all' }}>{supaUser.email}</div>
+              </div>
+              <div style={{ fontSize:10, color:'rgba(41,38,27,.45)' }}>
+                {syncState==='syncing'?'Synchronisiere…':syncState==='error'?'Sync-Fehler — lokal gespeichert.':'Synchronisiert ✓'}
+              </div>
+              <TweakInput label="Buddy-Name" value={appData.buddyName} placeholder="z. B. Sam" onChange={setBuddyName}/>
+              <TweakButton label="Abmelden" secondary onClick={()=>supa.auth.signOut()}/>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize:10, color:'rgba(41,38,27,.45)', lineHeight:1.4 }}>Nicht angemeldet — Daten bleiben lokal auf diesem Gerät.</div>
+              <TweakButton label="Anmelden" onClick={()=>setAuthOpen(true)}/>
+            </>
+          )}
+        </TweakSection>
         <TweakSection label="Stil">
           <TweakColor label="Akzent" value={appData.accent} options={ACCENT_OPTIONS} onChange={setAccent}/>
         </TweakSection>
