@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sammelbuch-v12';
+const CACHE_NAME = 'sammelbuch-v13';
 
 const APP_SHELL = [
   './Sammelbuch.html',
@@ -8,6 +8,7 @@ const CDN_URLS = [
   'https://unpkg.com/react@18/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
   'https://unpkg.com/@babel/standalone@7/babel.min.js',
+  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js',
 ];
 
 const FONTS_ORIGIN = 'https://fonts.googleapis.com';
