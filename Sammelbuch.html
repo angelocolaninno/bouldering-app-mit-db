@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v16';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v17';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -165,6 +165,22 @@ function loadRoutes(year) {
 // Wochen, in denen mit Buddy gebouldert wurde (Array von week_key, z.B. "2026-W05")
 function loadBuddyWeeks(year) {
   try { return JSON.parse(localStorage.getItem(`sb-buddy-${year}`) || '[]'); } catch { return []; }
+}
+// Weitere Aktivitäten (frei konfigurierbar, z.B. Joggen) — unabhängig vom Boulder-Check-in eines Tages
+const ACTIVITY_COLORS = ['#2a4eaa','#3a9a3a','#e07018','#d91a7a','#7a1818','#f0cc30'];
+function loadActivityTypes() {
+  try { return JSON.parse(localStorage.getItem('sb-activity-types') || '[]'); } catch { return []; }
+}
+function saveActivityTypes(arr) {
+  if (arr.length) localStorage.setItem('sb-activity-types', JSON.stringify(arr));
+  else localStorage.removeItem('sb-activity-types');
+}
+function loadActivities(year) {
+  try { return JSON.parse(localStorage.getItem(`sb-activities-${year}`) || '{}'); } catch { return {}; }
+}
+function saveActivities(year, obj) {
+  if (Object.keys(obj).length) localStorage.setItem(`sb-activities-${year}`, JSON.stringify(obj));
+  else localStorage.removeItem(`sb-activities-${year}`);
 }
 // Gym-übliche Grade-Bänder (Farbe = Griff-/Tapefarbe im Gym, gleichzeitig Schwierigkeit)
 const GRADES = [
@@ -531,6 +547,33 @@ function TweakInput({ label, value, placeholder, onChange }) {
   );
 }
 
+// Aktivitäten-Typen (z.B. Joggen) im Tweaks-Panel anlegen/entfernen
+function TweakActivityEditor({ types=[], onChange }) {
+  const [draft, setDraft]=React.useState('');
+  const add=()=>{
+    const l=draft.trim(); if (!l) return;
+    const id='act_'+l.toLowerCase().replace(/[^a-z0-9]/g,'_')+'_'+types.length;
+    const color=ACTIVITY_COLORS[types.length%ACTIVITY_COLORS.length];
+    onChange([...types,{id,label:l,color}]); setDraft('');
+  };
+  return (
+    <div className="twk-row">
+      <div style={{ display:'flex', gap:6 }}>
+        <input value={draft} onChange={(e)=>setDraft(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&add()} placeholder="z.B. Joggen"
+          style={{ flex:1, boxSizing:'border-box', padding:'6px 8px', borderRadius:8, border:'0.5px solid rgba(41,38,27,0.18)', background:'rgba(255,255,255,0.6)', fontFamily:'inherit', fontSize:11.5, color:'#29261b' }}/>
+        <button type="button" className="twk-btn" style={{ padding:'0 10px', flexShrink:0 }} onClick={add}>＋</button>
+      </div>
+      {types.map((t)=>(
+        <div key={t.id} style={{ display:'flex', alignItems:'center', gap:6, marginTop:6 }}>
+          <span style={{ width:8, height:8, borderRadius:'50%', background:t.color, flexShrink:0 }}/>
+          <span style={{ flex:1, fontSize:12 }}>{t.label}</span>
+          <button type="button" className="twk-btn secondary" style={{ padding:'0 8px', height:22, fontSize:11 }} onClick={()=>onChange(types.filter((x)=>x.id!==t.id))}>✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // BADGE EMBLEMS
 // ─────────────────────────────────────────────────────────────
@@ -740,7 +783,40 @@ function GradeLegend() {
   );
 }
 
-function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek }) {
+// Kleine Punkte-Zusammenfassung der Tages-Aktivitäten (Joggen etc.), direkt im Kalendertag
+function ActivityDots({ acts=[], types=[] }) {
+  if (!acts || !acts.length) return null;
+  const typeMap = Object.fromEntries(types.map((t)=>[t.id,t]));
+  return (
+    <div style={{ display:'flex', gap:2, justifyContent:'center', marginTop:1, flexWrap:'wrap' }}>
+      {acts.slice(0,4).map((id,i)=>{
+        const t=typeMap[id]; if (!t) return null;
+        return <span key={i} style={{ width:4, height:4, borderRadius:'50%', background:t.color, border:'0.5px solid rgba(255,255,255,0.5)' }}/>;
+      })}
+    </div>
+  );
+}
+
+// Tap-Toggle-Reihe für die frei konfigurierbaren Aktivitäten — nur für heute, unabhängig vom Boulder-Check-in
+function ActivityRow({ types=[], todayISO, activities={}, onToggle }) {
+  if (!types.length) return null;
+  const todayActs=new Set(activities[todayISO]||[]);
+  return (
+    <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'center', marginTop:14 }}>
+      {types.map((t)=>{
+        const on=todayActs.has(t.id);
+        return (
+          <button key={t.id} type="button" onClick={()=>onToggle(todayISO,t.id)}
+            style={{ padding:'7px 16px', borderRadius:999, background:on?t.color:'transparent', color:on?'#fff':'rgba(41,38,27,0.7)', border:on?'none':'0.5px solid rgba(41,38,27,0.22)', fontFamily:'system-ui', fontSize:13, fontWeight:500, cursor:'pointer', transition:'all .15s', WebkitTapHighlightColor:'transparent' }}>
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, activities={}, activityTypes=[] }) {
   const set=new Set(stats.sortedDays);
   const monthNames=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
   const [m,setM]=React.useState(()=> year===YEAR ? new Date().getMonth() : 0);
@@ -780,6 +856,7 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
           const hit=set.has(iso), isToday=iso===todayISO, future=iso>todayISO, isSel=sel===iso;
           const fill=hit?levelColor(accent, levels[iso]||'normal'):'transparent';
           const dayRoutes=routes[iso];
+          const dayActs=activities[iso];
           const circle=(
             <div style={{ width:'82%', aspectRatio:'1', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
               background:fill, border:isToday&&!hit?`1.2px dashed ${accent}`:'none',
@@ -791,6 +868,7 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
             <div style={{ display:'flex', flexDirection:'column', alignItems:'center', width:'100%' }}>
               {circle}
               {hit&&dayRoutes&&<GradeDots counts={dayRoutes}/>}
+              {dayActs&&dayActs.length>0&&<ActivityDots acts={dayActs} types={activityTypes}/>}
             </div>
           );
           if (editable && !future) {
@@ -873,7 +951,7 @@ function VizSegment({ value, onChange }) {
   );
 }
 
-function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen }) {
+function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen, activityTypes=[], activities={}, onToggleActivity }) {
   const remaining=Math.max(0,goal-stats.total);
   const goalPct=Math.min(100,Math.round((stats.total/goal)*100));
   const viewingPast=year!==YEAR;
@@ -909,7 +987,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
       </div>
       <div style={{ minHeight:220 }}>
         {viz==='heat'&&<VizHeatmap stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels}/>}
-        {viz==='month'&&<VizMonth stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels} routes={routes}/>}{/* nur Anzeige — Bearbeiten über „Vergangenen Tag nachtragen" */}
+        {viz==='month'&&<VizMonth stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels} routes={routes} activities={activities} activityTypes={activityTypes}/>}{/* nur Anzeige — Bearbeiten über „Vergangenen Tag nachtragen" */}
       </div>
       <div style={{ padding:'24px 20px 0' }}>
         <button onClick={onCheckin} disabled={btnDisabled} style={{ width:'100%', padding:'20px 24px', background:btnDisabled?'rgba(41,38,27,0.06)':'#29261b', color:btnDisabled?'rgba(41,38,27,0.55)':'#f6f2ea', border:0, borderRadius:18, fontFamily:'Newsreader,serif', fontSize:21, fontWeight:500, letterSpacing:'-0.005em', display:'flex', alignItems:'center', justifyContent:'space-between', boxShadow:btnDisabled?'none':'0 2px 0 rgba(0,0,0,0.04),0 12px 30px rgba(41,38,27,0.18)', cursor:btnDisabled?'default':'pointer', transition:'all .2s' }}>
@@ -919,6 +997,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
         <div style={{ fontSize:12, color:'rgba(41,38,27,0.45)', marginTop:10, textAlign:'center', fontFamily:'system-ui' }}>
           {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:`Noch ${remaining} bis zum Jahresziel.`}
         </div>
+        {!showDemo&&!viewingPast&&onToggleActivity&&<ActivityRow types={activityTypes} todayISO={todayISO} activities={activities} onToggle={onToggleActivity}/>}
         {!showDemo&&onNachtragen&&(
           <button onClick={onNachtragen} style={{ display:'block', margin:'14px auto 0', padding:'8px 16px', background:'transparent', border:'0.5px solid rgba(41,38,27,0.2)', borderRadius:999, fontFamily:'system-ui', fontSize:13, fontWeight:500, color:'rgba(41,38,27,0.7)', cursor:'pointer' }}>＋ Vergangenen Tag nachtragen</button>
         )}
@@ -1027,7 +1106,7 @@ function MiniHeatmap({ stats, accent, year=YEAR, levels={} }) {
   );
 }
 
-function JahrScreen({ stats, badges, accent, year=YEAR, levels={} }) {
+function JahrScreen({ stats, badges, accent, year=YEAR, levels={}, activityTypes=[], activities={} }) {
   const earned=badges.filter((b)=>b.earned);
   const highlight=earned.slice(-4);
   const [busy,setBusy]=React.useState(false);
@@ -1079,6 +1158,23 @@ function JahrScreen({ stats, badges, accent, year=YEAR, levels={} }) {
           <button onClick={shareCard} disabled={busy} style={{ padding:'14px 18px', background:'transparent', color:'#29261b', border:'0.5px solid rgba(41,38,27,0.25)', borderRadius:14, fontFamily:'system-ui', fontSize:14, fontWeight:500, cursor:busy?'default':'pointer', opacity:busy?0.6:1 }}>Teilen</button>
         </div>
       </div>
+      {activityTypes.length>0&&(()=>{
+        const rows=activityTypes.map((t)=>({...t,count:Object.values(activities).filter((a)=>a.includes(t.id)).length})).filter((t)=>t.count>0);
+        if (!rows.length) return null;
+        return (
+          <div style={{ padding:'0 20px 20px' }}>
+            <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:14, color:'rgba(41,38,27,0.6)', marginBottom:10 }}>Weitere Aktivitäten {year}</div>
+            {rows.map((t)=>(
+              <div key={t.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 0', borderBottom:'0.5px solid rgba(41,38,27,0.07)' }}>
+                <span style={{ width:10, height:10, borderRadius:'50%', background:t.color, flexShrink:0 }}/>
+                <span style={{ fontFamily:'system-ui', fontSize:14, color:'#29261b', flex:1 }}>{t.label}</span>
+                <span style={{ fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', fontSize:24, color:'#29261b', lineHeight:1 }}>{t.count}</span>
+                <span style={{ fontFamily:'system-ui', fontSize:11, color:'rgba(41,38,27,0.45)', marginLeft:-4 }}>×</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1209,7 +1305,7 @@ function CheckinMoment({ motion, total, todayDate, accent, onDone }) {
 const ACCENT_OPTIONS = ['#6b6862','#6b7a4b','#b3543a','#4a5a6a'];
 
 // Vollbild-Dialog zum Nachtragen vergangener Tage (nutzt die editierbare Monatsansicht)
-function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, onClose }) {
+function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, activities={}, activityTypes=[], onClose }) {
   return (
     <div style={{ position:'absolute', inset:0, zIndex:150, background:'rgba(246,242,234,0.98)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', display:'flex', flexDirection:'column', padding:'calc(env(safe-area-inset-top) + 28px) 22px calc(env(safe-area-inset-bottom) + 24px)', overflowY:'auto' }}>
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
@@ -1223,7 +1319,7 @@ function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLe
         Tippe einen Tag an — er wird gestempelt. Nochmal tippen entfernt ihn wieder.
       </div>
       <div style={{ marginTop:8 }}>
-        <VizMonth stats={{ sortedDays: checkins }} accent={accent} todayISO={isoDay(TODAY)} year={year} levels={levels} onToggle={onToggle} onSetLevel={onSetLevel} routes={routes} onSetRoutes={onSetRoutes} buddyWeeks={buddyWeeks} onToggleBuddyWeek={onToggleBuddyWeek}/>
+        <VizMonth stats={{ sortedDays: checkins }} accent={accent} todayISO={isoDay(TODAY)} year={year} levels={levels} onToggle={onToggle} onSetLevel={onSetLevel} routes={routes} onSetRoutes={onSetRoutes} buddyWeeks={buddyWeeks} onToggleBuddyWeek={onToggleBuddyWeek} activities={activities} activityTypes={activityTypes}/>
       </div>
       <button onClick={onClose} style={{ marginTop:'auto', padding:'16px 24px', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:18, fontWeight:500, cursor:'pointer', boxShadow:'0 12px 30px rgba(41,38,27,0.18)' }}>Fertig</button>
     </div>
@@ -1389,6 +1485,8 @@ function App() {
   const [supaUser, setSupaUser]=React.useState(null);
   const [syncState, setSyncState]=React.useState('idle');   // idle | syncing | synced | error
   const [authOpen, setAuthOpen]=React.useState(false);
+  const [activityTypes, setActivityTypes]=React.useState(loadActivityTypes);
+  const [activities, setActivities]=React.useState(()=>loadActivities(YEAR));
   const fileInputRef=React.useRef(null);
   const yearRef=React.useRef(year);
   React.useEffect(()=>{ yearRef.current=year; },[year]);
@@ -1447,7 +1545,17 @@ function App() {
   React.useEffect(()=>{ if (supaUser) setAuthOpen(false); },[supaUser]);
 
   // Check-ins & Level neu laden, wenn das angezeigte Jahr wechselt
-  React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year), routes: loadRoutes(year), buddyWeeks: loadBuddyWeeks(year)})); },[year]);
+  React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year), routes: loadRoutes(year), buddyWeeks: loadBuddyWeeks(year)})); setActivities(loadActivities(year)); },[year]);
+
+  // Aktivitäten-Typen sind rein lokal (kein Cloud-Sync) — unabhängig vom Boulder-Check-in eines Tages
+  const setActivityTypesPersist=(types)=>{ saveActivityTypes(types); setActivityTypes(types); };
+  const toggleActivity=(iso, typeId)=>{
+    const map={...activities};
+    const curr=new Set(map[iso]||[]);
+    if (curr.has(typeId)) curr.delete(typeId); else curr.add(typeId);
+    if (curr.size>0) map[iso]=[...curr]; else delete map[iso];
+    saveActivities(year,map); setActivities(map);
+  };
 
   const todayISO=isoDay(TODAY);
 
@@ -1457,6 +1565,7 @@ function App() {
   },[showDemo,appData.checkins]);
   const activeLevels = showDemo ? {} : appData.levels;
   const activeRoutes = showDemo ? {} : appData.routes;
+  const activeActivities = showDemo ? {} : activities;
 
   const stats=React.useMemo(()=>computeStats(activeCheckins),[activeCheckins]);
   const badges=React.useMemo(()=>earnedBadges(stats),[stats]);
@@ -1575,6 +1684,8 @@ function App() {
         if (!n) { alert('Keine Sammelbuch-Daten in der Datei gefunden.'); return; }
         const fresh=loadAppData();
         setAppData({...fresh, checkins:loadCheckins(year), levels:loadLevels(year)});
+        setActivityTypes(loadActivityTypes());
+        setActivities(loadActivities(year));
         setOnboardingActive(false);
         alert(`Backup geladen ✓ (${n} Einträge)`);
       } catch { alert('Konnte die Datei nicht lesen. Ist es ein Sammelbuch-Backup?'); }
@@ -1605,14 +1716,14 @@ function App() {
         onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if (f) importData(f); e.target.value=''; }}/>
       <div style={{ position:'absolute', inset:0, background:'#ffffff', color:'#29261b', overflow:'hidden' }}>
         <div style={{ position:'absolute', inset:0, overflowY:'auto', overflowX:'hidden', WebkitOverflowScrolling:'touch' }}>
-          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)}/>}
+          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)} activityTypes={activityTypes} activities={activeActivities} onToggleActivity={toggleActivity}/>}
           {tab==='erfolge'&&<ErfolgeScreen stats={stats} badges={badges}/>}
-          {tab==='jahr'&&<JahrScreen stats={stats} badges={badges} accent={appData.accent} year={year} levels={activeLevels}/>}
+          {tab==='jahr'&&<JahrScreen stats={stats} badges={badges} accent={appData.accent} year={year} levels={activeLevels} activityTypes={activityTypes} activities={activeActivities}/>}
         </div>
         <BottomNav tab={tab} setTab={setTab}/>
         {checkinActive&&<CheckinMoment motion={motion} total={stats.total+(checkedInToday?0:1)} todayDate={TODAY} accent={appData.accent} onDone={onCheckinDone}/>}
         {onboardingActive&&<Onboarding accent={appData.accent} onDone={(goal)=>{ setGoal(goal); localStorage.setItem('sb-onboarded','1'); setAppData((d)=>({...d,onboarded:true,goal})); setOnboardingActive(false); }}/>}
-        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} routes={appData.routes} onSetRoutes={setRouteCounts} buddyWeeks={appData.buddyWeeks} onToggleBuddyWeek={toggleBuddyWeek} onClose={()=>setNachtragenOpen(false)}/>}
+        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} routes={appData.routes} onSetRoutes={setRouteCounts} buddyWeeks={appData.buddyWeeks} onToggleBuddyWeek={toggleBuddyWeek} activities={activities} activityTypes={activityTypes} onClose={()=>setNachtragenOpen(false)}/>}
         {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
         {authOpen&&<AuthCard onClose={()=>setAuthOpen(false)}/>}
       </div>
@@ -1655,6 +1766,9 @@ function App() {
         )}
         <TweakSection label="Tage nachtragen">
           <DayEditor year={year} checkins={appData.checkins} accent={appData.accent} onToggle={toggleDay}/>
+        </TweakSection>
+        <TweakSection label="Aktivitäten">
+          <TweakActivityEditor types={activityTypes} onChange={setActivityTypesPersist}/>
         </TweakSection>
         <TweakSection label="Daten">
           <TweakButton label="Backup sichern (Download)" secondary onClick={exportData}/>

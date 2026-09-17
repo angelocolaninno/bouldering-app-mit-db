@@ -30,6 +30,8 @@ All persistence is `localStorage` first, keyed per year so a new year starts fre
 - `sb-goal`, `sb-accent`, `sb-onboarded` — global settings.
 - `sb-routes-<year>` — sparse map `{iso: {gradeKey: 1|2|3}}`, entered via the Grade-Chips in "Vergangenen Tag nachtragen". Grade bands + colors are `GRADES` (search for it) — 8 gym-typical bands (`bis 4c` … `ab 8a+`, plus `Guess the Grade`), shown as small dots on the day cell (`GradeDots`) and decoded by `GradeLegend` under the month grid.
 - `sb-buddy-<year>` — array of ISO week keys (`"2026-W05"`) where you climbed with your buddy that week.
+- `sb-activity-types` (global, not per-year) — user-defined activities (e.g. "Joggen") as `[{id,label,color}]`, managed in the Tweaks panel's "Aktivitäten" section (`TweakActivityEditor`).
+- `sb-activities-<year>` — sparse map `{iso: [typeId, ...]}`. Logged via a pill row on the main Sammeln screen (`ActivityRow`, today only) — deliberately **not** gated behind a boulder check-in, since e.g. jogging happens on days you may not boulder. This is the one exception to "editing lives only in NachtragenDialog". Local-only, no Supabase table yet.
 
 **Cloud sync (Supabase, since v13):** logged-in users additionally dual-write every change to Supabase tables `check_ins`, `routes`, `user_settings`, `buddy_weeks` (RLS-protected, `user_id = auth.uid()`). Magic-link login via `AuthCard`; `dbMigrateLocal()` copies existing `localStorage` data into the cloud once on first login. Not logged in = pure localStorage, fully offline. Client + helper functions (`dbLoadYear`, `dbUpsertCheckin`, etc.) live near the top of `Sammelbuch.html` (search `SUPABASE_URL`). See [NOTES-db.md](NOTES-db.md) for the full design and open verification gaps.
 

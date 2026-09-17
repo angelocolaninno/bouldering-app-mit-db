@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sammelbuch-v16';
+const CACHE_NAME = 'sammelbuch-v17';
 
 const APP_SHELL = [
   './Sammelbuch.html',
