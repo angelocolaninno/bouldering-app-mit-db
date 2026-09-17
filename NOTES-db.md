@@ -1,7 +1,11 @@
-# Notiz: Datenbank / Cloud-Sync (geplant, noch nicht umgesetzt)
+# Notiz: Datenbank / Cloud-Sync
+
+**Status: umgesetzt und live** (PR #2, gemerged 2026-07-08, `Sammelbuch.html` v13). Supabase-Projekt ist verbunden (URL + anon key stehen im Code), Login funktioniert, Live-Site lädt fehlerfrei. Tabellen heissen in der echten Umsetzung `check_ins`, `routes`, `user_settings`, `buddy_weeks` (nicht `checkins`/`profiles` wie ursprünglich unten geplant — siehe DB-Helper-Funktionen in `Sammelbuch.html` ab Zeile 68 für den tatsächlichen Stand).
 
 Ziel: Check-ins geräteübergreifend synchron + pro Nutzer, statt nur lokal in `localStorage`.
-Aktuell ist alles `localStorage` (siehe `CLAUDE.md` → Datenmodell). Das bleibt der Fallback/Offline-Speicher.
+`localStorage` bleibt der Offline-Fallback (Dual-Write: jede Änderung geht lokal UND — wenn eingeloggt — nach Supabase).
+
+Was noch nicht end-to-end verifiziert ist: ein echter Login-Durchlauf (Magic-Link-Mail öffnen + Klick) und ein Datenschreibtest gegen die echte DB. Das braucht Zugriff auf den Posteingang des Nutzers und wurde bisher nur bis zum "Bestätigungsscreen" getestet.
 
 ## Backend-Entscheid: **Supabase** (gratis-Tier)
 Warum: JS-Client per CDN nutzbar → **kein Build-Step nötig** (passt zur Single-File-App). Auth + Postgres + Row-Level-Security eingebaut. Gratis-Tier reicht locker.

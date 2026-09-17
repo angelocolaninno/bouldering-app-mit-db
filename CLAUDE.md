@@ -21,13 +21,15 @@ The entire app is **one file: `Sammelbuch.html`** (~1300 lines). There is **no b
 
 State lives in `App()` and flows down via props. There is no router; `tab` state switches between the Sammeln / Erfolge / Jahr screens.
 
-### Data model (localStorage, per browser/device — no backend)
+### Data model (localStorage, + optional Supabase cloud sync since v13)
 
-All persistence is `localStorage`, keyed per year so a new year starts fresh automatically (`YEAR = new Date().getFullYear()`):
+All persistence is `localStorage` first, keyed per year so a new year starts fresh automatically (`YEAR = new Date().getFullYear()`):
 
 - `sb-checkins-<year>` — JSON array of ISO day strings, e.g. `["2026-05-15"]` (the source of truth for "which days").
 - `sb-levels-<year>` — **sparse** map `{iso: "leicht"|"stark"}`. Absence = `"normal"`. Backward-compatible: old data/backups without this key just read as normal.
 - `sb-goal`, `sb-accent`, `sb-onboarded` — global settings.
+
+**Cloud sync (Supabase, since v13):** logged-in users additionally dual-write every change to Supabase tables `check_ins`, `routes`, `user_settings`, `buddy_weeks` (RLS-protected, `user_id = auth.uid()`). Magic-link login via `AuthCard`; `dbMigrateLocal()` copies existing `localStorage` data into the cloud once on first login. Not logged in = pure localStorage, fully offline. Client + helper functions (`dbLoadYear`, `dbUpsertCheckin`, etc.) live near the top of `Sammelbuch.html` (search `SUPABASE_URL`). See [NOTES-db.md](NOTES-db.md) for the full design and open verification gaps.
 
 `computeStats(checkins)` derives everything (total, streak, months, badges) from the checkins array. Levels are a presentation layer (dot color via `levelColor()`), never feed stats. Export/Import (Backup) grabs **all `sb-*` keys**, so new per-year keys are included automatically.
 
