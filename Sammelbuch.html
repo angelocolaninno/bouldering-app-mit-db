@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v14';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v15';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -158,7 +158,7 @@ function loadCheckins(year) {
 function loadLevels(year) {
   try { return JSON.parse(localStorage.getItem(`sb-levels-${year}`) || '{}'); } catch { return {}; }
 }
-// Routen-Farbzählung pro Tag (sparse map: iso -> {y,g,o,b,r,w,bl,p})
+// Grade-Zählung pro Tag (sparse map: iso -> {y,g,o,b,r,w,bl,p}, Wert 1-3 = wenig/einige/viele)
 function loadRoutes(year) {
   try { return JSON.parse(localStorage.getItem(`sb-routes-${year}`) || '{}'); } catch { return {}; }
 }
@@ -166,16 +166,18 @@ function loadRoutes(year) {
 function loadBuddyWeeks(year) {
   try { return JSON.parse(localStorage.getItem(`sb-buddy-${year}`) || '[]'); } catch { return []; }
 }
-const ROUTE_COLORS = [
-  { k:'y',  label:'Gelb',    hex:'#e3c23c' },
-  { k:'g',  label:'Grün',    hex:'#5f8a4a' },
-  { k:'o',  label:'Orange',  hex:'#d3792f' },
-  { k:'b',  label:'Blau',    hex:'#3f6ea8' },
-  { k:'r',  label:'Rot',     hex:'#b3413a' },
-  { k:'w',  label:'Weiss',   hex:'#e9e4d6' },
-  { k:'bl', label:'Schwarz', hex:'#2b2925' },
-  { k:'p',  label:'Pink',    hex:'#b95a9c' },
+// Gym-übliche Grade-Bänder (Farbe = Griff-/Tapefarbe im Gym, gleichzeitig Schwierigkeit)
+const GRADES = [
+  { k:'y',  label:'bis 4c',    short:'4c',  hex:'#f0cc30' },
+  { k:'g',  label:'5a – 6a',   short:'6a',  hex:'#3a9a3a' },
+  { k:'o',  label:'6a+ – 6b+', short:'6b+', hex:'#e07018' },
+  { k:'b',  label:'6c – 7a',   short:'7a',  hex:'#2a4eaa' },
+  { k:'r',  label:'7a+ – 7b+', short:'7b+', hex:'#7a1818' },
+  { k:'w',  label:'7c – 8a',   short:'8a',  hex:'#ddd8c8' },
+  { k:'bl', label:'ab 8a+',    short:'8a+', hex:'#1a1a1a' },
+  { k:'p',  label:'Guess the Grade', short:'GTG', hex:'#d91a7a' },
 ];
+const GRADE_COUNT_LABELS = ['', 'wenig', 'einige', 'viele'];
 
 // ── Farben: Akzent zu 'leicht' (heller, Richtung Papier) / 'stark' (dunkler, Richtung Tinte) mischen ──
 const PAPER='#f6f2ea', INK='#29261b';
@@ -685,25 +687,55 @@ function VizHeatmap({ stats, accent, todayISO, year=YEAR, levels={} }) {
   );
 }
 
-// Farbzählung der Routen eines Tages — Stepper pro Farbe
-function RouteCounters({ counts={}, onChange }) {
+// Grade-Zählung eines Tages — Tap-to-Cycle-Chips (1×=wenig, 2×=einige, 3×=viele, 4×=zurück auf 0)
+function GradeChips({ counts={}, onChange }) {
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:6, marginTop:8 }}>
-      {ROUTE_COLORS.map((c)=>{
-        const n=counts[c.k]||0;
+    <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:8 }}>
+      {GRADES.map((g)=>{
+        const n=counts[g.k]||0, active=n>0;
         return (
-          <div key={c.k} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 8px', borderRadius:10, background:'rgba(41,38,27,0.04)', border:'0.5px solid rgba(41,38,27,0.1)' }}>
-            <span style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, fontFamily:'system-ui', color:'#29261b' }}>
-              <span style={{ width:9, height:9, borderRadius:'50%', background:c.hex, boxShadow:'0 0 0 0.5px rgba(41,38,27,0.25)', flexShrink:0 }}/>{c.label}
-            </span>
-            <span style={{ display:'flex', alignItems:'center', gap:4 }}>
-              <button type="button" onClick={()=>onChange(c.k, Math.max(0,n-1))} style={{ width:20, height:20, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.12)', color:'#29261b', fontSize:13, lineHeight:1, cursor:'pointer' }}>–</button>
-              <span style={{ width:14, textAlign:'center', fontFamily:'Newsreader,serif', fontVariantNumeric:'oldstyle-nums', fontSize:13 }}>{n}</span>
-              <button type="button" onClick={()=>onChange(c.k, n+1)} style={{ width:20, height:20, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.12)', color:'#29261b', fontSize:13, lineHeight:1, cursor:'pointer' }}>+</button>
-            </span>
-          </div>
+          <button key={g.k} type="button" onClick={()=>onChange(g.k, (n+1)%4)}
+            style={{ display:'flex', alignItems:'center', gap:6, padding:'6px 10px', borderRadius:999,
+              border:active?`1px solid ${g.hex}`:'0.5px solid rgba(41,38,27,0.18)',
+              background:active?g.hex+'22':'rgba(41,38,27,0.04)', cursor:'pointer', WebkitTapHighlightColor:'transparent' }}>
+            <span style={{ width:10, height:10, borderRadius:'50%', background:g.hex, border:g.k==='w'?'0.5px solid rgba(41,38,27,0.3)':'none', flexShrink:0 }}/>
+            <span style={{ fontSize:11, fontWeight:600, color:'#29261b' }}>{g.short}</span>
+            {active&&<span style={{ fontSize:10, color:'rgba(41,38,27,0.5)' }}>{GRADE_COUNT_LABELS[n]}</span>}
+          </button>
         );
       })}
+    </div>
+  );
+}
+
+// Kleine Punkte-Zusammenfassung der Tages-Grade, direkt im Kalendertag
+function GradeDots({ counts={} }) {
+  const dots=[];
+  GRADES.forEach((g)=>{
+    const n=counts[g.k]||0;
+    for (let i=0;i<n;i++) dots.push({ hex:g.hex, id:`${g.k}-${i}`, isW:g.k==='w' });
+  });
+  if (!dots.length) return null;
+  return (
+    <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center', marginTop:2, maxWidth:'100%' }}>
+      {dots.slice(0,6).map((d)=>(
+        <span key={d.id} style={{ width:5, height:5, borderRadius:'50%', background:d.hex, border:d.isW?'0.5px solid rgba(41,38,27,0.3)':'none', flexShrink:0 }}/>
+      ))}
+      {dots.length>6&&<span style={{ fontSize:7, color:'rgba(41,38,27,0.4)', lineHeight:'5px' }}>+</span>}
+    </div>
+  );
+}
+
+// Legende: welche Farbe entspricht welchem Grade-Band
+function GradeLegend() {
+  return (
+    <div style={{ padding:'10px 0 0', display:'flex', flexWrap:'wrap', gap:'6px 12px' }}>
+      {GRADES.map((g)=>(
+        <div key={g.k} style={{ display:'flex', alignItems:'center', gap:5 }}>
+          <span style={{ width:8, height:8, borderRadius:'50%', background:g.hex, flexShrink:0, border:g.k==='w'?'0.5px solid rgba(41,38,27,0.35)':'none' }}/>
+          <span style={{ fontFamily:'system-ui', fontSize:10, color:'rgba(41,38,27,0.55)', whiteSpace:'nowrap' }}>{g.label}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -747,6 +779,7 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
           const iso=`${prefix}-${String(d).padStart(2,'0')}`;
           const hit=set.has(iso), isToday=iso===todayISO, future=iso>todayISO, isSel=sel===iso;
           const fill=hit?levelColor(accent, levels[iso]||'normal'):'transparent';
+          const dayRoutes=routes[iso];
           const circle=(
             <div style={{ width:'82%', aspectRatio:'1', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
               background:fill, border:isToday&&!hit?`1.2px dashed ${accent}`:'none',
@@ -754,15 +787,22 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
               color:hit?'#f6f0e1':(future?'rgba(41,38,27,0.28)':'rgba(41,38,27,0.7)'),
               boxShadow:isSel?`0 0 0 2px ${accent}`:(hit?'0 1px 4px rgba(41,38,27,0.18)':'none'), transition:'background .25s,color .25s,box-shadow .15s' }}>{d}</div>
           );
+          const cellInner=(
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', width:'100%' }}>
+              {circle}
+              {hit&&dayRoutes&&<GradeDots counts={dayRoutes}/>}
+            </div>
+          );
           if (editable && !future) {
             return (
               <button key={i} type="button" onClick={()=>onCell(iso,hit)}
-                style={{ aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center', border:0, background:'transparent', padding:0, cursor:'pointer', WebkitTapHighlightColor:'transparent' }}>{circle}</button>
+                style={{ aspectRatio:'1', display:'flex', alignItems:'flex-start', justifyContent:'center', paddingTop:2, border:0, background:'transparent', padding:0, cursor:'pointer', WebkitTapHighlightColor:'transparent' }}>{cellInner}</button>
             );
           }
-          return <div key={i} style={{ aspectRatio:'1', display:'flex', alignItems:'center', justifyContent:'center' }}>{circle}</div>;
+          return <div key={i} style={{ aspectRatio:'1', display:'flex', alignItems:'flex-start', justifyContent:'center', paddingTop:2 }}>{cellInner}</div>;
         })}
       </div>
+      <GradeLegend/>
       {editable && onSetLevel && sel && (
         <div style={{ marginTop:14, padding:'12px 14px', background:'#fbf8f1', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.12)' }}>
           <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:8 }}>
@@ -786,8 +826,8 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
       )}
       {editable && onSetRoutes && sel && (
         <div style={{ marginTop:10, padding:'12px 14px', background:'#fbf8f1', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.12)' }}>
-          <div style={{ fontFamily:'Newsreader,serif', fontSize:15, color:'#29261b' }}>Routen</div>
-          <RouteCounters counts={routes[sel]||{}} onChange={(k,v)=>onSetRoutes(sel,k,v)}/>
+          <div style={{ fontFamily:'Newsreader,serif', fontSize:15, color:'#29261b' }}>Grade</div>
+          <GradeChips counts={routes[sel]||{}} onChange={(k,v)=>onSetRoutes(sel,k,v)}/>
         </div>
       )}
       {editable && onToggleBuddyWeek && sel && (()=>{
@@ -833,7 +873,7 @@ function VizSegment({ value, onChange }) {
   );
 }
 
-function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, onToggleDay, onSetLevel, onNachtragen }) {
+function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen }) {
   const remaining=Math.max(0,goal-stats.total);
   const goalPct=Math.min(100,Math.round((stats.total/goal)*100));
   const viewingPast=year!==YEAR;
@@ -869,7 +909,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
       </div>
       <div style={{ minHeight:220 }}>
         {viz==='heat'&&<VizHeatmap stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels}/>}
-        {viz==='month'&&<VizMonth stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels}/>}{/* nur Anzeige — Bearbeiten über „Vergangenen Tag nachtragen" */}
+        {viz==='month'&&<VizMonth stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels} routes={routes}/>}{/* nur Anzeige — Bearbeiten über „Vergangenen Tag nachtragen" */}
       </div>
       <div style={{ padding:'24px 20px 0' }}>
         <button onClick={onCheckin} disabled={btnDisabled} style={{ width:'100%', padding:'20px 24px', background:btnDisabled?'rgba(41,38,27,0.06)':'#29261b', color:btnDisabled?'rgba(41,38,27,0.55)':'#f6f2ea', border:0, borderRadius:18, fontFamily:'Newsreader,serif', fontSize:21, fontWeight:500, letterSpacing:'-0.005em', display:'flex', alignItems:'center', justifyContent:'space-between', boxShadow:btnDisabled?'none':'0 2px 0 rgba(0,0,0,0.04),0 12px 30px rgba(41,38,27,0.18)', cursor:btnDisabled?'default':'pointer', transition:'all .2s' }}>
@@ -1393,6 +1433,7 @@ function App() {
     return appData.checkins;
   },[showDemo,appData.checkins]);
   const activeLevels = showDemo ? {} : appData.levels;
+  const activeRoutes = showDemo ? {} : appData.routes;
 
   const stats=React.useMemo(()=>computeStats(activeCheckins),[activeCheckins]);
   const badges=React.useMemo(()=>earnedBadges(stats),[stats]);
@@ -1541,7 +1582,7 @@ function App() {
         onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if (f) importData(f); e.target.value=''; }}/>
       <div style={{ position:'absolute', inset:0, background:'#ffffff', color:'#29261b', overflow:'hidden' }}>
         <div style={{ position:'absolute', inset:0, overflowY:'auto', overflowX:'hidden', WebkitOverflowScrolling:'touch' }}>
-          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)}/>}
+          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)}/>}
           {tab==='erfolge'&&<ErfolgeScreen stats={stats} badges={badges}/>}
           {tab==='jahr'&&<JahrScreen stats={stats} badges={badges} accent={appData.accent} year={year} levels={activeLevels}/>}
         </div>
