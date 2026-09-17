@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Parchment background -->
-  <rect width="512" height="512" rx="108" fill="#efe9dc"/>
+  <!-- Cool-toned background (vs. warm parchment on the old app) so the two icons read apart at a glance -->
+  <rect width="512" height="512" rx="108" fill="#dfe6e8"/>
 
   <!-- Mountain silhouette: main peak -->
   <path d="M256 96 L400 352 H112 Z" fill="#29261b"/>
@@ -10,8 +10,8 @@
   <!-- Snow cap on main peak -->
   <path d="M256 96 L292 172 L256 156 L220 172 Z" fill="#f6f2ea"/>
 
-  <!-- Decorative dashed border ring -->
-  <circle cx="256" cy="256" r="218" fill="none" stroke="#29261b" stroke-width="7" stroke-dasharray="16 10" opacity="0.3"/>
+  <!-- Decorative dashed border ring, tinted to the sync accent colour -->
+  <circle cx="256" cy="256" r="218" fill="none" stroke="#2a4eaa" stroke-width="7" stroke-dasharray="16 10" opacity="0.28"/>
 
   <!-- Thin inner ring -->
   <circle cx="256" cy="256" r="200" fill="none" stroke="#29261b" stroke-width="1.5" opacity="0.15"/>
@@ -19,4 +19,8 @@
   <!-- "SB" monogram -->
   <text x="256" y="420" font-family="Georgia, serif" font-size="54" font-weight="600"
         text-anchor="middle" fill="#29261b" letter-spacing="16" opacity="0.7">SB</text>
+
+  <!-- Cloud-sync badge (top-left) — the one deliberate marker that this is the DB/cloud-sync version -->
+  <circle cx="100" cy="100" r="38" fill="#dfe6e8"/>
+  <circle cx="100" cy="100" r="34" fill="#2a4eaa"/>
 </svg>
