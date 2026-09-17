@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-page PWA "Sammelbuch" — a yearly bouldering tracker: one stamp per gym day, badges, statistics, a shareable year card. Design philosophy is radical simplicity (one tap = one day, no routes/grades). Preserve that calm when adding features.
+A single-page PWA "Sammelbuch" — a yearly bouldering tracker: one stamp per gym day, badges, statistics, a shareable year card. Design philosophy is radical simplicity — the main "Heute gebouldert" tap stays a single action. Grades/buddy-weeks are optional detail, entered only via "Vergangenen Tag nachtragen", never forced on the main tap. Preserve that calm when adding features.
 
-- **Live:** https://angelocolaninno.github.io/bouldering-sammelapp/ (GitHub Pages, served from `main`)
+- **Live:** https://angelocolaninno.github.io/bouldering-app-mit-db/ (GitHub Pages, served from `main`). The older `bouldering-sammelapp` repo/site is decommissioned (Pages disabled) — this repo is now the only official version.
 - **Language:** UI text is German (de-CH).
 
 ## Architecture (the big picture)
@@ -28,6 +28,8 @@ All persistence is `localStorage` first, keyed per year so a new year starts fre
 - `sb-checkins-<year>` — JSON array of ISO day strings, e.g. `["2026-05-15"]` (the source of truth for "which days").
 - `sb-levels-<year>` — **sparse** map `{iso: "leicht"|"stark"}`. Absence = `"normal"`. Backward-compatible: old data/backups without this key just read as normal.
 - `sb-goal`, `sb-accent`, `sb-onboarded` — global settings.
+- `sb-routes-<year>` — sparse map `{iso: {gradeKey: 1|2|3}}`, entered via the Grade-Chips in "Vergangenen Tag nachtragen". Grade bands + colors are `GRADES` (search for it) — 8 gym-typical bands (`bis 4c` … `ab 8a+`, plus `Guess the Grade`), shown as small dots on the day cell (`GradeDots`) and decoded by `GradeLegend` under the month grid.
+- `sb-buddy-<year>` — array of ISO week keys (`"2026-W05"`) where you climbed with your buddy that week.
 
 **Cloud sync (Supabase, since v13):** logged-in users additionally dual-write every change to Supabase tables `check_ins`, `routes`, `user_settings`, `buddy_weeks` (RLS-protected, `user_id = auth.uid()`). Magic-link login via `AuthCard`; `dbMigrateLocal()` copies existing `localStorage` data into the cloud once on first login. Not logged in = pure localStorage, fully offline. Client + helper functions (`dbLoadYear`, `dbUpsertCheckin`, etc.) live near the top of `Sammelbuch.html` (search `SUPABASE_URL`). See [NOTES-db.md](NOTES-db.md) for the full design and open verification gaps.
 
