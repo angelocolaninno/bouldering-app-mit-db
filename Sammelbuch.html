@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v13';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v14';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -842,7 +842,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
     <div style={{ paddingBottom:110 }}>
       <div style={{ padding:'64px 20px 14px', display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
         <div>
-          <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600, display:'flex', alignItems:'center', gap:7 }}>Sammelbuch<span style={{ fontSize:9, letterSpacing:'.08em', color:accent, border:`1px solid ${accent}`, borderRadius:999, padding:'1px 6px 0', lineHeight:1.6 }}>DB</span></div>
+          <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Sammelbuch</div>
           <div style={{ fontFamily:'Newsreader,serif', fontSize:38, fontWeight:400, color:'#29261b', fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.015em', marginTop:1 }}>{year}</div>
           {stats.sortedDays.length>0
             ? <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:13, color:'rgba(41,38,27,0.55)', marginTop:2 }}>dabei seit {dateFmtLong(parseISO(stats.sortedDays[0]))}</div>
@@ -882,7 +882,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
         {!showDemo&&onNachtragen&&(
           <button onClick={onNachtragen} style={{ display:'block', margin:'14px auto 0', padding:'8px 16px', background:'transparent', border:'0.5px solid rgba(41,38,27,0.2)', borderRadius:999, fontFamily:'system-ui', fontSize:13, fontWeight:500, color:'rgba(41,38,27,0.7)', cursor:'pointer' }}>＋ Vergangenen Tag nachtragen</button>
         )}
-        <div style={{ marginTop:24, textAlign:'center', fontFamily:'system-ui', fontSize:11, letterSpacing:'.08em', color:'rgba(41,38,27,0.35)' }}>DB-Version · {APP_VERSION}</div>
+        <div style={{ marginTop:24, textAlign:'center', fontFamily:'system-ui', fontSize:11, letterSpacing:'.08em', color:'rgba(41,38,27,0.35)' }}>Version {APP_VERSION}</div>
       </div>
     </div>
   );
