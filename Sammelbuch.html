@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v18';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v19';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -181,6 +181,13 @@ function loadActivities(year) {
 function saveActivities(year, obj) {
   if (Object.keys(obj).length) localStorage.setItem(`sb-activities-${year}`, JSON.stringify(obj));
   else localStorage.removeItem(`sb-activities-${year}`);
+}
+// Tageshoroskop: einmal pro Tag als Vollbild-Moment zeigen
+function hasSeenHoroskopToday(todayISO) {
+  return localStorage.getItem('sb-horoskop-seen') === todayISO;
+}
+function markHoroskopSeen(todayISO) {
+  localStorage.setItem('sb-horoskop-seen', todayISO);
 }
 // Gym-übliche Grade-Bänder (Farbe = Griff-/Tapefarbe im Gym, gleichzeitig Schwierigkeit)
 const GRADES = [
@@ -302,6 +309,22 @@ function isoWeekKey(d) {
   const t = new Date(d.valueOf()); t.setHours(0,0,0,0);
   t.setDate(t.getDate() + 3 - ((t.getDay()+6)%7));
   return `${t.getFullYear()}-W${String(isoWeek(d)).padStart(2,'0')}`;
+}
+// Gemeinsame Streak: aufeinanderfolgende Wochen, in denen sowohl ich als auch der Buddy gebouldert haben
+function computeBuddyStreak(checkins, buddyWeeks) {
+  const buddySet=new Set(buddyWeeks);
+  const myWeeks=new Set(checkins.map((iso)=>isoWeekKey(parseISO(iso))));
+  const thisWeek=isoWeekKey(TODAY);
+  const bothWeeks=new Set([...myWeeks].filter((w)=>buddySet.has(w)));
+  let streak=0;
+  const check=new Date(TODAY);
+  check.setDate(check.getDate()-7); // letzte abgeschlossene Woche
+  for (let i=0;i<104;i++) {
+    if (bothWeeks.has(isoWeekKey(check))) { streak++; check.setDate(check.getDate()-7); }
+    else break;
+  }
+  if (myWeeks.has(thisWeek) && buddySet.has(thisWeek)) streak++; // aktuelle Woche zusätzlich, wenn beide schon dabei waren
+  return { streak, myThisWeek: myWeeks.has(thisWeek), buddyThisWeek: buddySet.has(thisWeek), thisWeek };
 }
 function isWinter(d) { const m = d.getMonth(); return m===11||m===0||m===1; }
 function dateFmtShort(d) { return d.toLocaleDateString('de-CH',{day:'2-digit',month:'short'}); }
@@ -816,6 +839,173 @@ function ActivityRow({ types=[], todayISO, activities={}, onToggle }) {
   );
 }
 
+// Karte auf dem Hauptscreen: gemeinsame Streak mit dem Buddy, Status "Du"/Buddy für diese Woche,
+// Schnell-Bestätigung für "Buddy war auch dabei". Die eigentliche Wochen-Verwaltung (beliebige Woche
+// an/aus) bleibt im Nachtragen-Dialog — hier gibt's nur den Schnellzugriff für die aktuelle Woche.
+function BuddyStreakCard({ checkins, buddyWeeks, buddyName, onConfirm }) {
+  const { streak, myThisWeek, buddyThisWeek, thisWeek } = computeBuddyStreak(checkins, buddyWeeks);
+  const active = streak>0 || (myThisWeek && buddyThisWeek);
+  const FlameIcon = () => (
+    <svg width="28" height="34" viewBox="0 0 28 34" fill="none" style={{ filter:active?'none':'grayscale(1)', opacity:active?1:0.32, transition:'all .4s' }}>
+      <path d="M14 2 C14 2 20 8 20 14 C20 18 18 20 16 21 C17 18 15 16 14 14 C13 16 11 18 12 21 C10 20 8 18 8 14 C8 8 14 2 14 2Z" fill={active?'#e07018':'#888'} opacity="0.9"/>
+      <path d="M14 10 C14 10 18 14 18 18 C18 21 16.5 23 14 24 C11.5 23 10 21 10 18 C10 14 14 10 14 10Z" fill={active?'#f0cc30':'#aaa'} opacity="0.85"/>
+      <path d="M14 16 C14 16 16 18.5 16 20.5 C16 22.2 15.1 23.5 14 24 C12.9 23.5 12 22.2 12 20.5 C12 18.5 14 16 14 16Z" fill={active?'#fbf8f1':'#ccc'} opacity="0.7"/>
+    </svg>
+  );
+  return (
+    <div style={{ margin:'0 20px 4px', padding:'14px 16px', background:'rgba(41,38,27,0.035)', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.1)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+        <FlameIcon/>
+        <div style={{ flex:1 }}>
+          <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
+            <div style={{ fontFamily:'Newsreader,serif', fontSize:28, fontWeight:400, color:'#29261b', lineHeight:1, fontVariantNumeric:'oldstyle-nums' }}>{streak}</div>
+            <div style={{ fontFamily:'system-ui', fontSize:11, color:'rgba(41,38,27,0.5)', fontWeight:500 }}>Wochen gemeinsam</div>
+          </div>
+          <div style={{ fontSize:9, letterSpacing:'.12em', textTransform:'uppercase', color:'rgba(41,38,27,0.38)', fontFamily:'system-ui', fontWeight:600, marginTop:3 }}>Gemeinsame Streak · {buddyName||'Buddy'}</div>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ width:7, height:7, borderRadius:'50%', background:myThisWeek?'#3a9a3a':'rgba(41,38,27,0.18)' }}/>
+            <span style={{ fontSize:10, color:'rgba(41,38,27,0.5)', fontFamily:'system-ui' }}>Du</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ width:7, height:7, borderRadius:'50%', background:buddyThisWeek?'#3a9a3a':'rgba(41,38,27,0.18)' }}/>
+            <span style={{ fontSize:10, color:'rgba(41,38,27,0.5)', fontFamily:'system-ui' }}>{buddyName||'Buddy'}</span>
+          </div>
+        </div>
+      </div>
+      {!buddyThisWeek && myThisWeek && (
+        <button type="button" onClick={()=>onConfirm(thisWeek)} style={{ marginTop:12, width:'100%', padding:'10px 0', borderRadius:10, border:'0.5px solid rgba(41,38,27,0.2)', background:'transparent', fontFamily:'system-ui', fontSize:13, fontWeight:500, color:'#29261b', cursor:'pointer' }}>
+          {buddyName||'Buddy'} war auch dabei diese Woche ✓
+        </button>
+      )}
+      {buddyThisWeek && (
+        <div style={{ marginTop:10, textAlign:'center', fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:13, color:'rgba(41,38,27,0.55)' }}>
+          Beide diese Woche — Streak läuft! 🔥
+        </div>
+      )}
+      {!myThisWeek && (
+        <div style={{ marginTop:10, textAlign:'center', fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:12, color:'rgba(41,38,27,0.45)' }}>
+          Du warst diese Woche noch nicht da.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tageshoroskop: pro Tag ein deterministischer Spruch (Datums-Seed, bleibt den Tag über gleich) ──
+function generateHoroskop(stats, todayISO) {
+  const today=parseISO(todayISO);
+  const dow=today.getDay();
+  const month=today.getMonth();
+  const DOW_PLURAL=['Sonntage','Montage','Dienstage','Mittwoche','Donnerstage','Freitage','Samstage'];
+  const MONTH_DE=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+
+  const dowCounts=Array(7).fill(0);
+  for (const d of stats.sortedDays) dowCounts[parseISO(d).getDay()]++;
+  const bestDow=dowCounts.indexOf(Math.max(...dowCounts));
+
+  const monthCounts=Array(12).fill(0);
+  for (const d of stats.sortedDays) monthCounts[parseISO(d).getMonth()]++;
+  const bestMonth=monthCounts.indexOf(Math.max(...monthCounts));
+
+  const milestones=[5,10,25,50,75,100,150];
+  const nextMilestone=milestones.find((m)=>m>stats.total) || stats.total+25;
+  const toMilestone=nextMilestone-stats.total;
+
+  const SEASONAL=[
+    'Der Januar fordert Willen. Du hast ihn bewiesen.',
+    'Der Februar ist kurz. Nutze ihn.',
+    'Im März erwacht die Kraft.',
+    'Der April ist unberechenbar — genau wie ein guter Boulder.',
+    'Der Mai öffnet die Fenster. Die Halle bleibt.',
+    'Im Juni brennt der Ehrgeiz. Lass ihn.',
+    'Der Juli ist heiß. Ein Grund mehr, in der Halle zu schwitzen.',
+    'Im August reift die Ernte. In der Halle auch.',
+    'September: Die beste Bouldersaison beginnt.',
+    'Oktober: Kälter draussen, wärmer in der Halle.',
+    'November gehört den Entschlossenen. Du bist dabei.',
+    'Dezember: Das Jahr neigt sich. Stempel ihn voll.',
+  ];
+
+  const pool=[
+    () => dow===bestDow
+      ? `Deine ${DOW_PLURAL[bestDow]} sind historisch stark — heute könnte dein Tag sein.`
+      : `Deine stärksten Tage sind ${DOW_PLURAL[bestDow]}. Das Muster lügt nicht.`,
+    () => toMilestone===1
+      ? `Besuch Nummer ${nextMilestone} wartet. Ein einziger Schritt fehlt.`
+      : `Noch ${toMilestone} Besuche bis zur ${nextMilestone}. Kein Druck — aber die Zahl ruft.`,
+    () => stats.longestStreak>=2
+      ? `${stats.longestStreak} Wochen am Stück — das steckt in den Muskeln. Die Form kommt schneller zurück als du denkst.`
+      : `Jede Reise beginnt mit dem ersten Schritt. Oder dem ersten Tritt.`,
+    () => SEASONAL[month],
+    () => stats.total===0
+      ? `Der erste Besuch ist der schwerste. Und der unvergesslichste.`
+      : `${stats.total} Besuche sagen mehr über dich als jedes Gespräch.`,
+    () => `Dein stärkster Monat war bisher der ${MONTH_DE[bestMonth]}. Kein Zufall.`,
+    () => `Die Route wartet. Sie ist dieselbe wie gestern — du nicht.`,
+    () => `Nicht die schwierigste Route definiert dich. Die, die du trotzdem nochmal versuchst.`,
+    () => `Ausdauer ist kein Talent. Es ist eine Entscheidung. Du hast sie ${stats.total}× getroffen.`,
+    () => `Der Berg kennt deinen Namen. Heute wäre ein guter Tag, ihn zu erinnern.`,
+    () => stats.monthsHit>=6
+      ? `${stats.monthsHit} verschiedene Monate — du bist keine Schönwetter-Kletterin.`
+      : `Noch ${12-stats.monthsHit} Monate fehlen für die Vollständigkeit. Der erste davon könnte heute sein.`,
+    () => `Ein schlechter Tag in der Halle ist immer noch besser als ein guter Tag auf der Couch.`,
+  ];
+
+  // Tages-Seed: ändert sich täglich, bleibt den ganzen Tag gleich
+  const seed=todayISO.split('-').reduce((acc,p)=>acc*31+parseInt(p,10),0);
+  return pool[seed%pool.length]();
+}
+
+function HoroskopCard({ stats, todayISO }) {
+  const text=React.useMemo(()=>generateHoroskop(stats,todayISO),[stats.total,stats.longestStreak,stats.monthsHit,todayISO]);
+  return (
+    <div style={{ margin:'0 20px 4px', padding:'14px 16px', background:'rgba(41,38,27,0.035)', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.1)' }}>
+      <div style={{ fontSize:9, letterSpacing:'.14em', textTransform:'uppercase', color:'rgba(41,38,27,0.38)', fontFamily:'system-ui', fontWeight:600, marginBottom:6 }}>Tageshoroskop</div>
+      <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:15, color:'rgba(41,38,27,0.82)', lineHeight:1.5 }}>{text}</div>
+    </div>
+  );
+}
+
+// Einmal-pro-Tag-Vollbild-Moment mit dem Horoskop — schliesst sich per Tap oder nach 12s selbst
+function HoroskopMoment({ stats, todayISO, onDone }) {
+  const [phase,setPhase]=React.useState('in');
+  const text=React.useMemo(()=>generateHoroskop(stats,todayISO),[]);
+  const today=parseISO(todayISO);
+  const weekdayDE=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'][today.getDay()];
+
+  React.useEffect(()=>{
+    const t1=setTimeout(()=>setPhase('settle'),120);
+    return ()=>clearTimeout(t1);
+  },[]);
+
+  const dismiss=React.useCallback(()=>{
+    setPhase('out');
+    markHoroskopSeen(todayISO);
+    setTimeout(onDone,420);
+  },[onDone,todayISO]);
+
+  React.useEffect(()=>{
+    const t=setTimeout(dismiss,12000);
+    return ()=>clearTimeout(t);
+  },[dismiss]);
+
+  return (
+    <div onClick={dismiss} style={{ position:'absolute', inset:0, zIndex:190, background:'rgba(246,242,234,0.98)', backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'0 32px', opacity:phase==='out'?0:1, transform:phase==='in'?'translateY(18px)':'translateY(0)', transition:'opacity .4s,transform .4s cubic-bezier(.3,.7,.4,1)', cursor:'pointer', overflow:'hidden' }}>
+      <svg width="48" height="48" viewBox="0 0 48 48" style={{ opacity:phase==='in'?0:0.22, transition:'opacity .5s .15s', marginBottom:28 }}>
+        <path d="M24 4 L26 22 L44 24 L26 26 L24 44 L22 26 L4 24 L22 22 Z" fill="#29261b"/>
+        <path d="M24 10 L25 22 L37 24 L25 26 L24 38 L23 26 L11 24 L23 22 Z" fill="#29261b" opacity="0.35" transform="rotate(45 24 24)"/>
+      </svg>
+      <div style={{ fontFamily:'system-ui', fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'rgba(41,38,27,0.4)', opacity:phase==='in'?0:1, transition:'opacity .4s .1s', marginBottom:16 }}>Tageshoroskop · {weekdayDE}</div>
+      <div style={{ fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:24, color:'#29261b', lineHeight:1.55, textAlign:'center', maxWidth:320, opacity:phase==='in'?0:1, transform:phase==='in'?'translateY(10px)':'translateY(0)', transition:'opacity .5s .18s,transform .5s .18s' }}>
+        «{text}»
+      </div>
+      <div style={{ marginTop:40, fontFamily:'system-ui', fontSize:11, color:'rgba(41,38,27,0.32)', opacity:phase==='settle'?1:0, transition:'opacity .5s 1.5s' }}>Tippen zum Schließen</div>
+    </div>
+  );
+}
+
 function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, activities={}, activityTypes=[] }) {
   const set=new Set(stats.sortedDays);
   const monthNames=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
@@ -951,7 +1141,7 @@ function VizSegment({ value, onChange }) {
   );
 }
 
-function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen, activityTypes=[], activities={}, onToggleActivity }) {
+function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen, activityTypes=[], activities={}, onToggleActivity, checkins=[], buddyWeeks, buddyName, onBuddyConfirm }) {
   const remaining=Math.max(0,goal-stats.total);
   const goalPct=Math.min(100,Math.round((stats.total/goal)*100));
   const viewingPast=year!==YEAR;
@@ -982,6 +1172,12 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
         <Stat label="Streak" value={`${stats.longestStreak} W.`} hint="in Folge"/>
         <Stat label="Monate" value={`${stats.monthsHit}/12`}/>
       </div>
+      {!showDemo&&!viewingPast&&(
+        <div style={{ padding:'14px 0 0' }}>
+          {buddyWeeks&&onBuddyConfirm&&<BuddyStreakCard checkins={checkins} buddyWeeks={buddyWeeks} buddyName={buddyName} onConfirm={onBuddyConfirm}/>}
+          <div style={{ padding:'10px 0 0' }}><HoroskopCard stats={stats} todayISO={todayISO}/></div>
+        </div>
+      )}
       <div style={{ padding:'14px 0 4px' }}>
         <VizSegment value={viz} onChange={setViz}/>
       </div>
@@ -1487,12 +1683,21 @@ function App() {
   const [authOpen, setAuthOpen]=React.useState(false);
   const [activityTypes, setActivityTypes]=React.useState(loadActivityTypes);
   const [activities, setActivities]=React.useState(()=>loadActivities(YEAR));
+  const [horoskopVisible, setHoroskopVisible]=React.useState(false);
   const fileInputRef=React.useRef(null);
   const yearRef=React.useRef(year);
   React.useEffect(()=>{ yearRef.current=year; },[year]);
 
   // Remove loading indicator once React has mounted
   React.useEffect(() => { document.getElementById('loading')?.remove(); }, []);
+
+  // Tageshoroskop einmal pro Tag beim App-Öffnen zeigen, falls schon onboarded und heute noch nicht gesehen
+  React.useEffect(()=>{
+    if (!loadAppData().onboarded) return;
+    if (hasSeenHoroskopToday(isoDay(TODAY))) return;
+    const t=setTimeout(()=>setHoroskopVisible(true), 900);
+    return ()=>clearTimeout(t);
+  },[]);
 
   // Cloud-Stand für ein Jahr laden und als lokalen Cache (localStorage) + State übernehmen
   const syncFromCloud=React.useCallback(async(y)=>{
@@ -1566,6 +1771,7 @@ function App() {
   const activeLevels = showDemo ? {} : appData.levels;
   const activeRoutes = showDemo ? {} : appData.routes;
   const activeActivities = showDemo ? {} : activities;
+  const activeBuddyWeeks = showDemo ? [] : appData.buddyWeeks;
 
   const stats=React.useMemo(()=>computeStats(activeCheckins),[activeCheckins]);
   const badges=React.useMemo(()=>earnedBadges(stats),[stats]);
@@ -1716,7 +1922,7 @@ function App() {
         onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if (f) importData(f); e.target.value=''; }}/>
       <div style={{ position:'absolute', inset:0, background:'#ffffff', color:'#29261b', overflow:'hidden' }}>
         <div style={{ position:'absolute', inset:0, overflowY:'auto', overflowX:'hidden', WebkitOverflowScrolling:'touch' }}>
-          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)} activityTypes={activityTypes} activities={activeActivities} onToggleActivity={toggleActivity}/>}
+          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)} activityTypes={activityTypes} activities={activeActivities} onToggleActivity={toggleActivity} checkins={activeCheckins} buddyWeeks={activeBuddyWeeks} buddyName={appData.buddyName} onBuddyConfirm={(wk)=>toggleBuddyWeek(wk,true)}/>}
           {tab==='erfolge'&&<ErfolgeScreen stats={stats} badges={badges}/>}
           {tab==='jahr'&&<JahrScreen stats={stats} badges={badges} accent={appData.accent} year={year} levels={activeLevels} activityTypes={activityTypes} activities={activeActivities}/>}
         </div>
@@ -1726,6 +1932,7 @@ function App() {
         {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} routes={appData.routes} onSetRoutes={setRouteCounts} buddyWeeks={appData.buddyWeeks} onToggleBuddyWeek={toggleBuddyWeek} activities={activities} activityTypes={activityTypes} onClose={()=>setNachtragenOpen(false)}/>}
         {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
         {authOpen&&<AuthCard onClose={()=>setAuthOpen(false)}/>}
+        {horoskopVisible&&<HoroskopMoment stats={stats} todayISO={todayISO} onDone={()=>setHoroskopVisible(false)}/>}
       </div>
 
       <TweaksPanel title="Tweaks">
@@ -1739,7 +1946,6 @@ function App() {
               <div style={{ fontSize:10, color:'rgba(41,38,27,.45)' }}>
                 {syncState==='syncing'?'Synchronisiere…':syncState==='error'?'Sync-Fehler — lokal gespeichert.':'Synchronisiert ✓'}
               </div>
-              <TweakInput label="Buddy-Name" value={appData.buddyName} placeholder="z. B. Sam" onChange={setBuddyName}/>
               <TweakButton label="Abmelden" secondary onClick={()=>supa.auth.signOut()}/>
             </>
           ) : (
@@ -1769,6 +1975,9 @@ function App() {
         </TweakSection>
         <TweakSection label="Aktivitäten">
           <TweakActivityEditor types={activityTypes} onChange={setActivityTypesPersist}/>
+        </TweakSection>
+        <TweakSection label="Buddy Streak">
+          <TweakInput label="Name des Buddy" value={appData.buddyName} placeholder="z. B. Sam" onChange={setBuddyName}/>
         </TweakSection>
         <TweakSection label="Daten">
           <TweakButton label="Backup sichern (Download)" secondary onClick={exportData}/>

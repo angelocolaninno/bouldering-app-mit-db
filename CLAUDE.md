@@ -32,6 +32,14 @@ All persistence is `localStorage` first, keyed per year so a new year starts fre
 - `sb-buddy-<year>` — array of ISO week keys (`"2026-W05"`) where you climbed with your buddy that week.
 - `sb-activity-types` (global, not per-year) — user-defined activities (e.g. "Joggen") as `[{id,label,color}]`, managed in the Tweaks panel's "Aktivitäten" section (`TweakActivityEditor`).
 - `sb-activities-<year>` — sparse map `{iso: [typeId, ...]}`. Logged via a pill row on the main Sammeln screen (`ActivityRow`, today only) — deliberately **not** gated behind a boulder check-in, since e.g. jogging happens on days you may not boulder. This is the one exception to "editing lives only in NachtragenDialog". Local-only, no Supabase table yet.
+- `sb-buddy-name` (global) — the buddy's display name, set in the Tweaks panel's "Buddy Streak" section, independent of login.
+- `sb-horoskop-seen` — today's ISO date once the `HoroskopMoment` full-screen quote has been shown/dismissed; gates it to once per day.
+
+### Main-screen cards
+
+`SammelnScreen` shows two optional cards between the Besuche/Streak/Monate stat row and the Jahr/Monat toggle, both hidden during demo mode and when browsing a past year (`!showDemo && !viewingPast`):
+- **`BuddyStreakCard`** — flame icon, consecutive-weeks count (`computeBuddyStreak`), "Du"/buddy status dots for the current ISO week, and a one-tap "war auch dabei" confirm button that just calls the existing `toggleBuddyWeek`. Editing an arbitrary past week still lives in NachtragenDialog ("Mit Buddy diese Woche") — this card is only a quick-access shortcut for *this* week.
+- **`HoroskopCard`** — a persistent inline card with `generateHoroskop()`'s date-seeded quote (same text all day, changes at midnight). A separate full-screen `HoroskopMoment` shows the same quote once per day, 900ms after app open, auto-dismissing after 12s or on tap. Deliberately **not** chained into any post-checkin prompt sequence — the main "Heute gebouldert" tap stays a single action.
 
 **Cloud sync (Supabase, since v13):** logged-in users additionally dual-write every change to Supabase tables `check_ins`, `routes`, `user_settings`, `buddy_weeks` (RLS-protected, `user_id = auth.uid()`). Magic-link login via `AuthCard`; `dbMigrateLocal()` copies existing `localStorage` data into the cloud once on first login. Not logged in = pure localStorage, fully offline. Client + helper functions (`dbLoadYear`, `dbUpsertCheckin`, etc.) live near the top of `Sammelbuch.html` (search `SUPABASE_URL`). See [NOTES-db.md](NOTES-db.md) for the full design and open verification gaps.
 
