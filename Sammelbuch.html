@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v19';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v20';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -1006,6 +1006,39 @@ function HoroskopMoment({ stats, todayISO, onDone }) {
   );
 }
 
+// Konfetti-Moment, wenn direkt nach dem Stempeln ein neuer Anstecker verdient wurde
+function BadgeUnlockMoment({ badge, onDone }) {
+  const [phase, setPhase]=React.useState('in');
+  const particles=React.useMemo(()=>Array.from({ length:32 }, (_,i)=>({
+    id:i, left:5+Math.random()*90, delay:Math.random()*0.55, dur:1.3+Math.random()*0.9,
+    w:8+Math.random()*8, h:5+Math.random()*5,
+    color:['#b3543a','#6b7a4b','#4a5a6a','#7a6a4f','#a48a5b','#d4b06a','#6b4f7a'][i%7],
+  })),[]);
+  React.useEffect(()=>{
+    const t1=setTimeout(()=>setPhase('settle'),80);
+    const t2=setTimeout(()=>setPhase('out'),3600);
+    const t3=setTimeout(onDone,4100);
+    return ()=>[t1,t2,t3].forEach(clearTimeout);
+  },[onDone]);
+  return (
+    <>
+      <style>{`@keyframes sbKonfetti{0%{transform:translateY(-16px) rotate(0deg);opacity:.88}100%{transform:translateY(105vh) rotate(540deg);opacity:0}}`}</style>
+      <div onClick={onDone} style={{ position:'absolute', inset:0, zIndex:205, background:'rgba(246,242,234,0.97)', backdropFilter:'blur(12px)', WebkitBackdropFilter:'blur(12px)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', opacity:phase==='out'?0:1, transition:'opacity .45s', cursor:'pointer', overflow:'hidden' }}>
+        {phase!=='in' && particles.map((p)=>(
+          <div key={p.id} style={{ position:'absolute', top:0, left:`${p.left}%`, width:p.w, height:p.h, background:p.color, borderRadius:2, animation:`sbKonfetti ${p.dur}s ${p.delay}s ease-in both` }}/>
+        ))}
+        <div style={{ transform:phase==='in'?'scale(0.42) translateY(36px)':'scale(1) translateY(0)', opacity:phase==='in'?0:1, transition:'transform .55s cubic-bezier(.25,1.5,.4,1),opacity .38s', position:'relative', zIndex:1 }}>
+          <AlpinBadge badge={badge} size={140} earned/>
+        </div>
+        <div style={{ position:'relative', zIndex:1, marginTop:20, fontFamily:'system-ui', fontSize:10, letterSpacing:'.14em', textTransform:'uppercase', color:'rgba(41,38,27,0.45)', opacity:phase==='in'?0:1, transition:'opacity .4s .22s' }}>Anstecker verdient</div>
+        <div style={{ position:'relative', zIndex:1, fontFamily:'Newsreader,serif', fontSize:27, fontWeight:500, color:'#29261b', letterSpacing:'-0.01em', marginTop:8, opacity:phase==='in'?0:1, transition:'opacity .4s .28s' }}>{badge.label}</div>
+        <div style={{ position:'relative', zIndex:1, fontFamily:'Newsreader,serif', fontStyle:'italic', fontSize:15, color:'rgba(41,38,27,0.6)', marginTop:6, maxWidth:264, textAlign:'center', lineHeight:1.4, opacity:phase==='in'?0:1, transition:'opacity .4s .34s' }}>{badge.hint}.</div>
+        <div style={{ position:'relative', zIndex:1, marginTop:32, fontSize:11, color:'rgba(41,38,27,0.3)', fontFamily:'system-ui', opacity:phase==='settle'?1:0, transition:'opacity .5s 1.4s' }}>Tippen zum Schließen</div>
+      </div>
+    </>
+  );
+}
+
 function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, activities={}, activityTypes=[] }) {
   const set=new Set(stats.sortedDays);
   const monthNames=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
@@ -1222,12 +1255,36 @@ function BadgeCell({ badge }) {
   );
 }
 
-function LockedCell({ badge }) {
+// Fortschritt bis zum nächsten Anstecker, für die Badges mit einer klaren Zahl-Bedingung
+function badgeProgress(badge, stats) {
+  const map = {
+    funf:    { cur: stats.total,          max: 5  },
+    zehn:    { cur: stats.total,          max: 10 },
+    xxv:     { cur: stats.total,          max: 25 },
+    funfzig: { cur: stats.total,          max: 50 },
+    streak3: { cur: stats.longestStreak,  max: 3  },
+    sammler: { cur: stats.monthsHit,      max: 11 },
+  };
+  const p = map[badge.id];
+  return p ? { cur: Math.min(p.cur, p.max), max: p.max } : null;
+}
+
+function LockedCell({ badge, stats }) {
+  const prog=badgeProgress(badge, stats);
   return (
     <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, padding:'4px 0' }}>
       <AlpinBadgeLocked size={84}/>
       <div style={{ fontFamily:'Newsreader,serif', fontSize:12, fontWeight:500, color:'rgba(41,38,27,0.55)', textAlign:'center', lineHeight:1.2, marginTop:4, padding:'0 4px' }}>{badge.label}</div>
-      <div style={{ fontFamily:'system-ui', fontSize:10, color:'rgba(41,38,27,0.4)', textAlign:'center', padding:'0 6px', lineHeight:1.3 }}>{badge.hint}</div>
+      {prog ? (
+        <div style={{ width:'80%', display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+          <div style={{ width:'100%', height:3, background:'rgba(41,38,27,0.1)', borderRadius:999, overflow:'hidden' }}>
+            <div style={{ width:`${Math.round((prog.cur/prog.max)*100)}%`, height:'100%', background:'rgba(41,38,27,0.28)', borderRadius:999, transition:'width .5s' }}/>
+          </div>
+          <div style={{ fontFamily:'system-ui', fontSize:10, color:'rgba(41,38,27,0.4)', textAlign:'center' }}>{prog.cur} / {prog.max}</div>
+        </div>
+      ) : (
+        <div style={{ fontFamily:'system-ui', fontSize:10, color:'rgba(41,38,27,0.4)', textAlign:'center', padding:'0 6px', lineHeight:1.3 }}>{badge.hint}</div>
+      )}
     </div>
   );
 }
@@ -1275,7 +1332,7 @@ function ErfolgeScreen({ stats, badges }) {
         <div style={{ padding:'28px 8px 0' }}>
           <div style={{ padding:'0 14px' }}><SectionLabel>Noch offen</SectionLabel></div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'20px 8px', marginTop:16, padding:'0 8px' }}>
-            {locked.map((b)=><LockedCell key={b.id} badge={b}/>)}
+            {locked.map((b)=><LockedCell key={b.id} badge={b} stats={stats}/>)}
           </div>
         </div>
       )}
@@ -1684,6 +1741,7 @@ function App() {
   const [activityTypes, setActivityTypes]=React.useState(loadActivityTypes);
   const [activities, setActivities]=React.useState(()=>loadActivities(YEAR));
   const [horoskopVisible, setHoroskopVisible]=React.useState(false);
+  const [newlyEarnedBadges, setNewlyEarnedBadges]=React.useState([]);
   const fileInputRef=React.useRef(null);
   const yearRef=React.useRef(year);
   React.useEffect(()=>{ yearRef.current=year; },[year]);
@@ -1782,11 +1840,21 @@ function App() {
     setCheckinActive(false);
     if (!showDemo && !checkedInToday) {
       const next=[...new Set([...appData.checkins,todayISO])];
+      const prevEarned=new Set(badges.filter((b)=>b.earned).map((b)=>b.id));
+      const justEarned=earnedBadges(computeStats(next)).filter((b)=>b.earned&&!prevEarned.has(b.id));
       localStorage.setItem(`sb-checkins-${YEAR}`,JSON.stringify(next));
       setAppData((d)=>({...d,checkins:next}));
-      setLevelPromptISO(todayISO);   // optionale Stufen-Rückfrage einblenden
+      if (justEarned.length>0) setNewlyEarnedBadges(justEarned);
+      else setLevelPromptISO(todayISO);   // optionale Stufen-Rückfrage einblenden
       if (supaUser) dbUpsertCheckin(todayISO, YEAR, 'normal').catch(()=>setSyncState('error'));
     }
+  };
+
+  // Konfetti-Moment(e) der Reihe nach abarbeiten, danach optionale Stufen-Rückfrage
+  const onBadgeUnlockDone=()=>{
+    const rest=newlyEarnedBadges.slice(1);
+    setNewlyEarnedBadges(rest);
+    if (rest.length===0) setLevelPromptISO(todayISO);
   };
 
   // Anstrengungs-Stufe eines Tages setzen (sparse: 'normal' = kein Eintrag)
@@ -1933,6 +2001,7 @@ function App() {
         {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
         {authOpen&&<AuthCard onClose={()=>setAuthOpen(false)}/>}
         {horoskopVisible&&<HoroskopMoment stats={stats} todayISO={todayISO} onDone={()=>setHoroskopVisible(false)}/>}
+        {newlyEarnedBadges.length>0&&<BadgeUnlockMoment badge={newlyEarnedBadges[0]} onDone={onBadgeUnlockDone}/>}
       </div>
 
       <TweaksPanel title="Tweaks">
