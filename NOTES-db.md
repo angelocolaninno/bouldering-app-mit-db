@@ -1,63 +1,33 @@
-# Notiz: Datenbank / Cloud-Sync
+# Datenbank und geräteübergreifende Speicherung
 
-**Status: umgesetzt und live** (PR #2, gemerged 2026-07-08, `Sammelbuch.html` v13). Supabase-Projekt ist verbunden (URL + anon key stehen im Code), Login funktioniert, Live-Site lädt fehlerfrei. Tabellen heissen in der echten Umsetzung `check_ins`, `routes`, `user_settings`, `buddy_weeks` (nicht `checkins`/`profiles` wie ursprünglich unten geplant — siehe DB-Helper-Funktionen in `Sammelbuch.html` ab Zeile 68 für den tatsächlichen Stand).
+**Status: umgesetzt.** Das Projekt `spjjxmoutbqubakvshpm` verwendet Supabase in `eu-west-2`. Die produktive Datenbank-Erweiterung für Aktivitäten und die App-RPCs ist am 27. September 2026 eingespielt. Die Änderungen an der App müssen noch in `main` übernommen werden, bevor GitHub Pages sie auf den Geräten ausliefert.
 
-Ziel: Check-ins geräteübergreifend synchron + pro Nutzer, statt nur lokal in `localStorage`.
-`localStorage` bleibt der Offline-Fallback (Dual-Write: jede Änderung geht lokal UND — wenn eingeloggt — nach Supabase).
+## Architektur
 
-Was noch nicht end-to-end verifiziert ist: ein echter Login-Durchlauf (Magic-Link-Mail öffnen + Klick) und ein Datenschreibtest gegen die echte DB. Das braucht Zugriff auf den Posteingang des Nutzers und wurde bisher nur bis zum "Bestätigungsscreen" getestet.
+Supabase ist die einzige schreibbare Quelle für Boulder-Tage, Routen, Buddy-Wochen, Kontoeinstellungen sowie Trainingsarten und Trainingstage. Nach dem Magic-Link-Login lädt die App einen privaten Snapshot über alle Jahre. Eine Änderung gilt erst dann als gespeichert, wenn die Datenbank sie bestätigt hat. Bei fehlender Verbindung bleibt der letzte bestätigte Snapshot nur lesbar.
 
-## Backend-Entscheid: **Supabase** (gratis-Tier)
-Warum: JS-Client per CDN nutzbar → **kein Build-Step nötig** (passt zur Single-File-App). Auth + Postgres + Row-Level-Security eingebaut. Gratis-Tier reicht locker.
-- Caveat Gratis-Tier: Projekt pausiert nach ~1 Woche Inaktivität, wacht beim nächsten Aufruf auf (paar Sekunden). Für privat ok.
-- Alternative gleichwertig: Firebase (Firestore + Auth).
+`localStorage` wird ausschliesslich als kontogetrennter Cache und als Quelle für eine bewusst ausgelöste einmalige Datenübernahme verwendet. Lokale JSON-Backups enthalten nur geprüfte App-Daten, keine Supabase-Sitzungen. Die Übernahme ergänzt fehlende Einträge; vorhandene Datenbankeinträge und Einstellungen behalten Vorrang.
 
-## Connector-Status (wichtig)
-- Es gibt einen offiziellen **Supabase-Connector** im claude.ai-Verzeichnis (Anthropic & Partner) — vom Nutzer **verbunden**.
-- ABER: in der **Claude-Code-CLI-Umgebung ist er NICHT verfügbar** (Sichtbarkeits-Check `list_connectors` kam leer). Claude kann Supabase also **nicht** direkt von der Repo-Arbeit aus steuern.
-- Vorgehen beim Bau: Claude liefert **Copy-paste-SQL** für den Supabase-SQL-Editor + verdrahtet den JS-Client im Code. (Der Connector ist nur in der claude.ai-Web-App nutzbar.)
+## Tabellen und Zugriff
 
-## Was der Nutzer vor der Bau-Session bereitstellt
-1. Supabase-Projekt anlegen (gratis, Region EU/Frankfurt).
-2. Aus **Settings → API**: **Project-URL** + **anon public key** (anon-Key darf öffentlich im Client-Code stehen; RLS schützt die Daten).
+- `check_ins`: Boulder-Datum und Intensität.
+- `routes`: Routen-Zählungen pro Boulder-Datum.
+- `buddy_weeks`: bestätigte Wochen.
+- `user_settings`: Jahresziel, Akzentfarbe, Buddy-Name und Einrichtungsstatus.
+- `activity_types`: private Aktivitätsnamen und Farben.
+- `activity_logs`: private Trainingsdaten je Aktivitätsart und Datum.
 
-## Geplante Tabellen
+Alle Tabellen nutzen Row-Level Security und beschränken Zugriff auf `auth.uid()`. Die App lädt und schreibt Daten über `sammelbuch_snapshot` und `sammelbuch_mutate`. Beide Funktionen verlangen ein angemeldetes Konto; Schreibaufträge prüfen zusätzlich die erwartete Benutzer-ID.
 
-### `checkins` — eine Zeile pro Tag pro Nutzer
-| Spalte | Typ | Hinweis |
-|---|---|---|
-| `user_id` | uuid → auth.users | Default `auth.uid()` |
-| `day` | date | der Boulder-Tag |
-| `level` | text | `leicht` / `normal` / `stark`, Default `normal`, CHECK-Constraint |
-| `created_at` | timestamptz | Default `now()` |
+Das Schema liegt in `supabase/migrations/20260927081924_database_first_tracker.sql`. Der Versionsname stimmt mit dem Eintrag in der produktiven Supabase-Migrationsliste überein.
 
-- **unique (user_id, day)** → pro Tag genau ein Eintrag.
-- Jahr/Streak/Statistik wie bisher aus den Zeilen berechnen (`extract(year from day)`). Kein „pro Jahr"-Key mehr nötig.
+## Lokale Entwicklung
 
-### `profiles` — Einstellungen pro Nutzer
-| Spalte | Typ | |
-|---|---|---|
-| `user_id` | uuid (PK) → auth.users | |
-| `goal` | int | Default 40 |
-| `accent` | text | Akzentfarbe |
-| `onboarded` | bool | Default false |
+```bash
+npm install
+npm run dev
+npm run check
+npm test
+```
 
-### Sicherheit
-- RLS auf beiden Tabellen aktiviert.
-- Policies: select/insert/update/delete nur wo `user_id = auth.uid()`.
-
-### Auth
-- Magic-Link per E-Mail (kein Passwort) — einfachste Variante.
-- Optional „Mit Apple anmelden" für iOS-PWA.
-
-## Migration (einmalig beim ersten Login)
-App liest bestehende `localStorage`-Daten und schreibt sie in die DB, falls die Cloud für diesen User noch leer ist:
-- `sb-checkins-<jahr>` → `checkins`-Zeilen (level aus `sb-levels-<jahr>`, sonst `normal`).
-- `sb-goal` / `sb-accent` / `sb-onboarded` → `profiles`.
-So gehen die bisherigen Einträge nicht verloren.
-
-## Integration in die App (Stichworte für die Umsetzung)
-- `<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">` (CDN, kein Build).
-- `createClient(URL, ANON_KEY)`.
-- Login-Screen / Auth-State; bei eingeloggtem User Cloud als Quelle, sonst localStorage-Fallback (offline-fähig halten).
-- SW-Cache (`CACHE_NAME` + `APP_VERSION`) beim Deploy hochzählen.
+Beim Deploy müssen `APP_VERSION` in `Sammelbuch.html` und `CACHE_NAME` in `sw.js` gemeinsam erhöht werden. Der Service Worker darf keine Supabase-/Auth-Anfragen zwischenspeichern.
