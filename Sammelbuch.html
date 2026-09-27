@@ -65,7 +65,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v21';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v22';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -1046,10 +1046,10 @@ function VizMonth({ stats, accent, todayISO, year=YEAR, levels={}, onToggle, onS
 // ─────────────────────────────────────────────────────────────
 function Stat({ label, value, hint }) {
   return (
-    <div>
-      <div style={{ fontSize:11, letterSpacing:'.08em', textTransform:'uppercase', color:'rgba(41,38,27,0.5)', fontFamily:'system-ui', fontWeight:500 }}>{label}</div>
-      <div style={{ fontFamily:'Newsreader,serif', fontSize:32, fontWeight:400, color:'#29261b', lineHeight:1.05, fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.01em', marginTop:2 }}>{value}</div>
-      {hint&&<div style={{ fontSize:11, color:'rgba(41,38,27,0.45)', marginTop:2 }}>{hint}</div>}
+    <div style={{ display:'flex', alignItems:'baseline', gap:4, whiteSpace:'nowrap', minWidth:0 }}>
+      <span style={{ fontSize:10, letterSpacing:'.06em', textTransform:'uppercase', color:'rgba(41,38,27,0.5)', fontFamily:'system-ui', fontWeight:500 }}>{label}</span>
+      <span style={{ fontFamily:'Newsreader,serif', fontSize:19, fontWeight:400, color:'#29261b', lineHeight:1, fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.01em' }}>{value}</span>
+      {hint&&<span style={{ fontSize:10, color:'rgba(41,38,27,0.45)' }}>{hint}</span>}
     </div>
   );
 }
@@ -1092,16 +1092,23 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
           </div>
         </div>
       </div>
-      <div style={{ display:'flex', gap:30, padding:'6px 20px 22px', borderBottom:'0.5px solid rgba(41,38,27,0.1)' }}>
+      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', gap:8, padding:'2px 20px 14px', borderBottom:'0.5px solid rgba(41,38,27,0.1)' }}>
         <Stat label="Besuche" value={stats.total}/>
         <Stat label="Streak" value={`${stats.longestStreak} W.`} hint="in Folge"/>
         <Stat label="Monate" value={`${stats.monthsHit}/12`}/>
       </div>
-      {!showDemo&&!viewingPast&&(
-        <div style={{ padding:'14px 0 0' }}>
-          {buddyWeeks&&onBuddyConfirm&&<BuddyStreakCard checkins={checkins} buddyWeeks={buddyWeeks} buddyName={buddyName} onConfirm={onBuddyConfirm}/>}
-          <div style={{ padding:'10px 0 0' }}><HoroskopCard stats={stats} todayISO={todayISO}/></div>
+      <div style={{ padding:'14px 20px 0' }}>
+        <button onClick={onCheckin} disabled={btnDisabled} style={{ width:'100%', padding:'17px 20px', background:btnDisabled?'rgba(41,38,27,0.06)':'#29261b', color:btnDisabled?'rgba(41,38,27,0.55)':'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:21, fontWeight:500, letterSpacing:'-0.005em', display:'flex', alignItems:'center', justifyContent:'space-between', boxShadow:btnDisabled?'none':'0 2px 0 rgba(0,0,0,0.04),0 12px 30px rgba(41,38,27,0.18)', cursor:btnDisabled?'default':'pointer', transition:'all .2s' }}>
+          <span>{viewingPast?`Archiv ${year}`:checkedInToday?'Heute gestempelt':showDemo?'Demo-Modus':'Heute gebouldert'}</span>
+          <span style={{ fontFamily:'system-ui', fontSize:13, opacity:0.7, fontWeight:500, letterSpacing:'.04em' }}>{viewingPast?'🔒':checkedInToday?'✓':showDemo?'–':dateFmtShort(TODAY)}</span>
+        </button>
+        <div style={{ fontSize:12, color:'rgba(41,38,27,0.45)', marginTop:8, textAlign:'center', fontFamily:'system-ui' }}>
+          {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:`Noch ${remaining} bis zum Jahresziel.`}
         </div>
+        {!showDemo&&!viewingPast&&<ActivityRow types={activityTypes} todayISO={todayISO} activities={activities} onToggle={onToggleActivity}/>}
+      </div>
+      {!showDemo&&!viewingPast&&(
+        <div style={{ padding:'12px 20px 0' }}><HoroskopCard stats={stats} todayISO={todayISO}/></div>
       )}
       <div style={{ padding:'14px 0 4px' }}>
         <VizSegment value={viz} onChange={setViz}/>
@@ -1111,17 +1118,10 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
         {viz==='month'&&<VizMonth stats={stats} accent={accent} todayISO={todayISO} year={year} levels={levels} routes={routes} activities={activities} activityTypes={activityTypes}/>}{/* nur Anzeige — Bearbeiten über „Vergangenen Tag nachtragen" */}
       </div>
       <div style={{ padding:'24px 20px 0' }}>
-        <button onClick={onCheckin} disabled={btnDisabled} style={{ width:'100%', padding:'20px 24px', background:btnDisabled?'rgba(41,38,27,0.06)':'#29261b', color:btnDisabled?'rgba(41,38,27,0.55)':'#f6f2ea', border:0, borderRadius:18, fontFamily:'Newsreader,serif', fontSize:21, fontWeight:500, letterSpacing:'-0.005em', display:'flex', alignItems:'center', justifyContent:'space-between', boxShadow:btnDisabled?'none':'0 2px 0 rgba(0,0,0,0.04),0 12px 30px rgba(41,38,27,0.18)', cursor:btnDisabled?'default':'pointer', transition:'all .2s' }}>
-          <span>{viewingPast?`Archiv ${year}`:checkedInToday?'Heute gestempelt':showDemo?'Demo-Modus':'Heute gebouldert'}</span>
-          <span style={{ fontFamily:'system-ui', fontSize:13, opacity:0.7, fontWeight:500, letterSpacing:'.04em' }}>{viewingPast?'🔒':checkedInToday?'✓':showDemo?'–':dateFmtShort(TODAY)}</span>
-        </button>
-        <div style={{ fontSize:12, color:'rgba(41,38,27,0.45)', marginTop:10, textAlign:'center', fontFamily:'system-ui' }}>
-          {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:`Noch ${remaining} bis zum Jahresziel.`}
-        </div>
-        {!showDemo&&!viewingPast&&<ActivityRow types={activityTypes} todayISO={todayISO} activities={activities} onToggle={onToggleActivity}/>}
         {!showDemo&&onNachtragen&&(
           <button onClick={onNachtragen} style={{ display:'block', margin:'14px auto 0', padding:'8px 16px', background:'transparent', border:'0.5px solid rgba(41,38,27,0.2)', borderRadius:999, fontFamily:'system-ui', fontSize:13, fontWeight:500, color:'rgba(41,38,27,0.7)', cursor:'pointer' }}>＋ Vergangenen Tag nachtragen</button>
         )}
+        {!showDemo&&!viewingPast&&buddyWeeks&&onBuddyConfirm&&<BuddyStreakCard checkins={checkins} buddyWeeks={buddyWeeks} buddyName={buddyName} onConfirm={onBuddyConfirm}/>}
         <div style={{ marginTop:24, textAlign:'center', fontFamily:'system-ui', fontSize:11, letterSpacing:'.08em', color:'rgba(41,38,27,0.35)' }}>Version {APP_VERSION}</div>
       </div>
     </div>
@@ -1603,7 +1603,7 @@ function legacySignature(snapshot) {
 
 function App() {
   const [tab,setTab]=React.useState('sammeln');
-  const [viz,setViz]=React.useState('heat');
+  const [viz,setViz]=React.useState('month');
   const [motion,setMotion]=React.useState('stamp');
   const [showDemo,setShowDemo]=React.useState(false);
   const [year,setYear]=React.useState(YEAR);
@@ -1617,6 +1617,7 @@ function App() {
   const [authReady,setAuthReady]=React.useState(false);
   const [legacy]=React.useState(legacyData);
   const [legacyClaim,setLegacyClaim]=React.useState(()=>localStorage.getItem('sammelbuch-legacy-import-v2')||'');
+  const [legacyDismissed,setLegacyDismissed]=React.useState(()=>localStorage.getItem('sammelbuch-legacy-dismissed-v1')||'');
   const [cloud,setCloud]=React.useState({user:null,snapshot:Data.emptySnapshot(),status:'loading',ready:false,busy:false,error:'',lastSynced:null});
   const fileInputRef=React.useRef(null);
   const storeRef=React.useRef(null);
@@ -1632,6 +1633,7 @@ function App() {
   const signature=legacySignature(legacy.snapshot);
   const hasLegacy=Data.hasData(legacy.snapshot);
   const canImportLegacy=hasLegacy&&!legacyClaim;
+  const showLegacyPrompt=canImportLegacy&&legacyDismissed!==signature;
   const years=Data.years(snapshot,YEAR);
   const activeCheckins=showDemo?DEMO_CHECKINS:appData.checkins;
   const activeLevels=showDemo?{}:appData.levels;
@@ -1748,6 +1750,10 @@ function App() {
       setNotice('Lokale Daten erfolgreich in der Datenbank gespeichert.');
     }
   };
+  const dismissLegacyPrompt=()=>{
+    setLegacyDismissed(signature);
+    try {localStorage.setItem('sammelbuch-legacy-dismissed-v1',signature);} catch {}
+  };
   const resetAll=async()=>{
     if (!canEdit||!confirm(`Alle Boulder-Tage, Routen, Buddy-Wochen und Trainingseinträge für ${year} auf allen Geräten löschen? Sichere vorher ein Backup.`)) return;
     if (await mutate({kind:'reset_year',year})) setNotice(`${year} wurde in der Datenbank zurückgesetzt.`);
@@ -1775,7 +1781,8 @@ function App() {
         <div style={{padding:'58px 20px 12px',background:'rgba(41,38,27,.035)',borderBottom:'1px solid rgba(41,38,27,.08)'}}>{statusPanel()}</div>
         {notice&&<div role="alert" style={{padding:'12px 20px',fontSize:13,background:'#f6f2ea'}}>{notice}<button aria-label="Hinweis schliessen" onClick={()=>setNotice('')} style={{float:'right',border:0,background:'none'}}>✕</button></div>}
         {legacy.error&&<div role="alert" style={{padding:'12px 20px',fontSize:13}}>Lokale Altdaten konnten nicht gelesen werden: {legacy.error}. Sie bleiben unverändert auf diesem Gerät.</div>}
-        {canImportLegacy&&<div style={{padding:'14px 20px',fontSize:13,background:'#f6f2ea',lineHeight:1.5}}>
+        {showLegacyPrompt&&<div style={{position:'relative',padding:'14px 52px 14px 20px',fontSize:13,background:'#f6f2ea',lineHeight:1.5}}>
+          <button type="button" aria-label="Hinweis ausblenden" title="Du findest die lokalen Daten unter Einstellungen wieder" onClick={dismissLegacyPrompt} style={{position:'absolute',top:10,right:14,border:0,background:'transparent',fontSize:20,lineHeight:1,color:'rgba(41,38,27,.55)',cursor:'pointer',padding:'2px 5px'}}>×</button>
           <strong>Auf diesem Gerät liegen noch lokale Daten.</strong>
           <div>{legacy.snapshot.checkins.length} Boulder-Tage · {legacy.snapshot.activities.length} Trainingseinträge. Übernimm sie einmal in dein Konto.</div>
           <button className="twk-btn" disabled={!canEdit} style={{marginTop:8}} onClick={importLocal}>Lokale Daten übernehmen</button>
@@ -1808,6 +1815,13 @@ function App() {
         <TweakSection label="Ansicht"><TweakRadio label="Visualisierung" value={viz} options={[{value:'heat',label:'Jahr'},{value:'month',label:'Monat'}]} onChange={setViz}/><TweakRadio label="Animation" value={motion} options={[{value:'stamp',label:'Stempel'},{value:'fill',label:'Füllen'},{value:'rustle',label:'Rascheln'}]} onChange={setMotion}/></TweakSection>
         {years.length>1&&<TweakSection label="Jahr"><TweakRadio label="Anzeigen" value={year} options={years.map(y=>({value:y,label:String(y)}))} onChange={setYear}/></TweakSection>}
         <TweakSection label="Daten">
+          <div style={{marginBottom:8,fontSize:12,color:'rgba(41,38,27,.65)',lineHeight:1.5}}>
+            {hasLegacy
+              ? <><strong>Lokale Gerätedaten</strong><br/>{legacy.snapshot.checkins.length} Boulder-Tage · {legacy.snapshot.activities.length} Trainingseinträge{canImportLegacy?'. Du kannst sie einmalig zu deinem Konto hinzufügen.':'. Diese lokalen Daten wurden auf diesem Gerät bereits übernommen.'}</>
+              : <>Keine alten lokalen Gerätedaten zum Übernehmen gefunden.</>}
+          </div>
+          {canImportLegacy&&<button className="twk-btn secondary" disabled={!canEdit} onClick={importLocal}>Lokale Daten ins Konto übernehmen</button>}
+          {hasLegacy&&<button className="twk-btn secondary" onClick={()=>saveBackup(legacy.snapshot,'-lokal')}>Lokale Daten sichern (Download)</button>}
           <button className="twk-btn secondary" disabled={!supaUser||cloud.busy} onClick={exportData}>Backup sichern (Download)</button>
           <button className="twk-btn secondary" disabled={!canEdit} onClick={()=>fileInputRef.current?.click()}>Backup in Konto übernehmen</button>
           <TweakToggle label="Demo-Daten anzeigen" value={showDemo} onChange={setShowDemo}/>
