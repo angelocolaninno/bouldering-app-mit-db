@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sammelbuch-v21';
+const CACHE_NAME = 'sammelbuch-v22';
 const APP_SHELL = ['./Sammelbuch.html','./data-model.js','./cloud-store.js','./manifest.json','./icon-192.svg','./icon-512.svg'];
 const CDN_URLS = [
   'https://unpkg.com/react@18.3.1/umd/react.production.min.js',
