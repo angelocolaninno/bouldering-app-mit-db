@@ -52,10 +52,12 @@
   <div id="loading">Sammelbuch lädt…</div>
   <button id="tweaks-btn" title="Tweaks öffnen (oder ? drücken)">&#9881;</button>
   <div id="root" style="position:relative;z-index:1"></div>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.9/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.min.js"></script>
+  <script src="./data-model.js"></script>
+  <script src="./cloud-store.js"></script>
   <script type="text/babel">
 
 // ─────────────────────────────────────────────────────────────
@@ -63,86 +65,13 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v20';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v21';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_emWxaAYz8pR6ALmN2pk36Q_37vJ1FXW';
 const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-async function dbCurrentUser() {
-  const { data: { user } } = await supa.auth.getUser();
-  return user;
-}
-async function dbLoadYear(year) {
-  const [ciRes, rtRes] = await Promise.all([
-    supa.from('check_ins').select('date,level').eq('year', year),
-    supa.from('routes').select('date,y,g,o,b,r,w,bl,p').eq('year', year),
-  ]);
-  if (ciRes.error) throw ciRes.error;
-  if (rtRes.error) throw rtRes.error;
-  const checkins = (ciRes.data || []).map((r) => r.date).sort();
-  const levels = {};
-  (ciRes.data || []).forEach((r) => { if (r.level && r.level !== 'normal') levels[r.date] = r.level; });
-  const routes = {};
-  (rtRes.data || []).forEach((r) => {
-    const { date, ...counts } = r;
-    const nz = Object.fromEntries(Object.entries(counts).filter(([, v]) => v > 0));
-    if (Object.keys(nz).length) routes[date] = nz;
-  });
-  return { checkins, levels, routes };
-}
-async function dbUpsertCheckin(date, year, level = 'normal') {
-  const user = await dbCurrentUser(); if (!user) return;
-  return supa.from('check_ins').upsert({ user_id: user.id, date, year, level }, { onConflict: 'user_id,date' });
-}
-async function dbDeleteCheckin(date) {
-  const user = await dbCurrentUser(); if (!user) return;
-  return supa.from('check_ins').delete().eq('user_id', user.id).eq('date', date);
-}
-async function dbUpsertRoutes(date, year, counts = {}) {
-  const user = await dbCurrentUser(); if (!user) return;
-  const row = { user_id: user.id, date, year, y: 0, g: 0, o: 0, b: 0, r: 0, w: 0, bl: 0, p: 0, ...counts };
-  return supa.from('routes').upsert(row, { onConflict: 'user_id,date' });
-}
-async function dbLoadSettings() {
-  const { data, error } = await supa.from('user_settings').select('goal,accent,buddy_name').maybeSingle();
-  if (error) return null;
-  return data;
-}
-async function dbSaveSettings({ goal, accent, buddy_name }) {
-  const user = await dbCurrentUser(); if (!user) return;
-  return supa.from('user_settings').upsert({ user_id: user.id, goal, accent, buddy_name }, { onConflict: 'user_id' });
-}
-async function dbLoadBuddyWeeks(year) {
-  const { data, error } = await supa.from('buddy_weeks').select('week_key').like('week_key', `${year}-W%`);
-  if (error) return [];
-  return (data || []).map((r) => r.week_key).sort();
-}
-async function dbToggleBuddyWeek(weekKey, on) {
-  const user = await dbCurrentUser(); if (!user) return;
-  if (on) return supa.from('buddy_weeks').upsert({ user_id: user.id, week_key: weekKey }, { onConflict: 'user_id,week_key' });
-  return supa.from('buddy_weeks').delete().eq('user_id', user.id).eq('week_key', weekKey);
-}
-// Einmalige Migration: bestehende localStorage-Daten in die Cloud schreiben, falls dort noch nichts liegt
-async function dbMigrateLocal() {
-  const user = await dbCurrentUser(); if (!user) return;
-  const { count } = await supa.from('check_ins').select('*', { count: 'exact', head: true });
-  if (count && count > 0) return;   // Cloud hat schon Daten — nicht überschreiben
-  for (const y of availableYears()) {
-    const checkins = loadCheckins(y);
-    const levels = loadLevels(y);
-    for (const iso of checkins) { await dbUpsertCheckin(iso, y, levels[iso] || 'normal'); }
-    const routes = loadRoutes(y);
-    for (const [iso, counts] of Object.entries(routes)) { await dbUpsertRoutes(iso, y, counts); }
-    for (const wk of loadBuddyWeeks(y)) { await dbToggleBuddyWeek(wk, true); }
-  }
-  await dbSaveSettings({
-    goal: JSON.parse(localStorage.getItem('sb-goal') || '40'),
-    accent: localStorage.getItem('sb-accent') || '#6b6862',
-    buddy_name: localStorage.getItem('sb-buddy-name') || '',
-  });
-}
 
 function toRoman(n) {
   const map=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
@@ -150,38 +79,8 @@ function toRoman(n) {
 }
 const ROMAN_YEAR = toRoman(YEAR);
 
-// Check-ins eines Jahres aus localStorage lesen (Schlüssel pro Jahr: sb-checkins-<jahr>)
-function loadCheckins(year) {
-  try { return JSON.parse(localStorage.getItem(`sb-checkins-${year}`) || '[]'); } catch { return []; }
-}
-// Anstrengungs-Level pro Tag (sparse: nur abweichende von 'normal' werden gespeichert)
-function loadLevels(year) {
-  try { return JSON.parse(localStorage.getItem(`sb-levels-${year}`) || '{}'); } catch { return {}; }
-}
-// Grade-Zählung pro Tag (sparse map: iso -> {y,g,o,b,r,w,bl,p}, Wert 1-3 = wenig/einige/viele)
-function loadRoutes(year) {
-  try { return JSON.parse(localStorage.getItem(`sb-routes-${year}`) || '{}'); } catch { return {}; }
-}
-// Wochen, in denen mit Buddy gebouldert wurde (Array von week_key, z.B. "2026-W05")
-function loadBuddyWeeks(year) {
-  try { return JSON.parse(localStorage.getItem(`sb-buddy-${year}`) || '[]'); } catch { return []; }
-}
-// Weitere Aktivitäten (frei konfigurierbar, z.B. Joggen) — unabhängig vom Boulder-Check-in eines Tages
 const ACTIVITY_COLORS = ['#2a4eaa','#3a9a3a','#e07018','#d91a7a','#7a1818','#f0cc30'];
-function loadActivityTypes() {
-  try { return JSON.parse(localStorage.getItem('sb-activity-types') || '[]'); } catch { return []; }
-}
-function saveActivityTypes(arr) {
-  if (arr.length) localStorage.setItem('sb-activity-types', JSON.stringify(arr));
-  else localStorage.removeItem('sb-activity-types');
-}
-function loadActivities(year) {
-  try { return JSON.parse(localStorage.getItem(`sb-activities-${year}`) || '{}'); } catch { return {}; }
-}
-function saveActivities(year, obj) {
-  if (Object.keys(obj).length) localStorage.setItem(`sb-activities-${year}`, JSON.stringify(obj));
-  else localStorage.removeItem(`sb-activities-${year}`);
-}
+function activityId() { return 'act_'+(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+'_'+Math.random().toString(36).slice(2)); }
 // Tageshoroskop: einmal pro Tag als Vollbild-Moment zeigen
 function hasSeenHoroskopToday(todayISO) {
   return localStorage.getItem('sb-horoskop-seen') === todayISO;
@@ -271,17 +170,6 @@ function downloadBlob(blob, name){
   a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1500);
 }
-// Alle Jahre, für die Daten existieren (plus aktuelles Jahr), absteigend sortiert
-function availableYears() {
-  const years=new Set([YEAR]);
-  for (let i=0;i<localStorage.length;i++) {
-    const k=localStorage.key(i);
-    const m=k && k.match(/^sb-checkins-(\d{4})$/);
-    if (m) years.add(Number(m[1]));
-  }
-  return [...years].sort((a,b)=>b-a);
-}
-
 const DEMO_CHECKINS = [
   '2026-01-08','2026-01-13','2026-01-22',
   '2026-02-03','2026-02-10','2026-02-17','2026-02-26',
@@ -561,11 +449,15 @@ function TweakButton({ label, onClick, secondary=false }) {
 }
 
 function TweakInput({ label, value, placeholder, onChange }) {
+  const [draft,setDraft]=React.useState(value);
+  React.useEffect(()=>setDraft(value),[value]);
+  const save=async()=>{if (draft!==value) await onChange(draft);};
   return (
     <div className="twk-row">
       <div className="twk-lbl"><span>{label}</span></div>
-      <input type="text" value={value} placeholder={placeholder} onChange={(e)=>onChange(e.target.value)}
+      <input type="text" value={draft} maxLength={100} placeholder={placeholder} onChange={(e)=>setDraft(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'){e.preventDefault();save();}}}
         style={{ width:'100%', boxSizing:'border-box', padding:'6px 8px', borderRadius:8, border:'0.5px solid rgba(41,38,27,0.18)', background:'rgba(255,255,255,0.6)', fontFamily:'inherit', fontSize:11.5, color:'#29261b' }}/>
+      <button className="twk-btn secondary" disabled={draft===value} onClick={save}>Speichern</button>
     </div>
   );
 }
@@ -573,16 +465,16 @@ function TweakInput({ label, value, placeholder, onChange }) {
 // Aktivitäten-Typen (z.B. Joggen) im Tweaks-Panel anlegen/entfernen
 function TweakActivityEditor({ types=[], onChange }) {
   const [draft, setDraft]=React.useState('');
-  const add=()=>{
+  const add=async()=>{
     const l=draft.trim(); if (!l) return;
-    const id='act_'+l.toLowerCase().replace(/[^a-z0-9]/g,'_')+'_'+types.length;
+    const id=activityId();
     const color=ACTIVITY_COLORS[types.length%ACTIVITY_COLORS.length];
-    onChange([...types,{id,label:l,color}]); setDraft('');
+    if (await onChange([...types,{id,label:l,color}])) setDraft('');
   };
   return (
     <div className="twk-row">
       <div style={{ display:'flex', gap:6 }}>
-        <input value={draft} onChange={(e)=>setDraft(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&add()} placeholder="z.B. Joggen"
+        <input value={draft} maxLength={100} aria-label="Neue Aktivität" onChange={(e)=>setDraft(e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&add()} placeholder="z.B. Joggen"
           style={{ flex:1, boxSizing:'border-box', padding:'6px 8px', borderRadius:8, border:'0.5px solid rgba(41,38,27,0.18)', background:'rgba(255,255,255,0.6)', fontFamily:'inherit', fontSize:11.5, color:'#29261b' }}/>
         <button type="button" className="twk-btn" style={{ padding:'0 10px', flexShrink:0 }} onClick={add}>＋</button>
       </div>
@@ -829,7 +721,7 @@ function ActivityRow({ types=[], todayISO, activities={}, onToggle }) {
       {types.map((t)=>{
         const on=todayActs.has(t.id);
         return (
-          <button key={t.id} type="button" onClick={()=>onToggle(todayISO,t.id)}
+          <button key={t.id} type="button" disabled={!onToggle} aria-pressed={on} onClick={()=>onToggle?.(todayISO,t.id)}
             style={{ padding:'7px 16px', borderRadius:999, background:on?t.color:'transparent', color:on?'#fff':'rgba(41,38,27,0.7)', border:on?'none':'0.5px solid rgba(41,38,27,0.22)', fontFamily:'system-ui', fontSize:13, fontWeight:500, cursor:'pointer', transition:'all .15s', WebkitTapHighlightColor:'transparent' }}>
             {t.label}
           </button>
@@ -1174,14 +1066,14 @@ function VizSegment({ value, onChange }) {
   );
 }
 
-function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen, activityTypes=[], activities={}, onToggleActivity, checkins=[], buddyWeeks, buddyName, onBuddyConfirm }) {
+function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen, activityTypes=[], activities={}, onToggleActivity, checkins=[], buddyWeeks, buddyName, onBuddyConfirm, canEdit=true }) {
   const remaining=Math.max(0,goal-stats.total);
   const goalPct=Math.min(100,Math.round((stats.total/goal)*100));
   const viewingPast=year!==YEAR;
-  const btnDisabled=checkedInToday||showDemo||viewingPast;
+  const btnDisabled=checkedInToday||showDemo||viewingPast||!canEdit;
   return (
     <div style={{ paddingBottom:110 }}>
-      <div style={{ padding:'64px 20px 14px', display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+      <div style={{ padding:'24px 20px 14px', display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
         <div>
           <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Sammelbuch</div>
           <div style={{ fontFamily:'Newsreader,serif', fontSize:38, fontWeight:400, color:'#29261b', fontVariantNumeric:'oldstyle-nums', letterSpacing:'-0.015em', marginTop:1 }}>{year}</div>
@@ -1226,7 +1118,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
         <div style={{ fontSize:12, color:'rgba(41,38,27,0.45)', marginTop:10, textAlign:'center', fontFamily:'system-ui' }}>
           {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:`Noch ${remaining} bis zum Jahresziel.`}
         </div>
-        {!showDemo&&!viewingPast&&onToggleActivity&&<ActivityRow types={activityTypes} todayISO={todayISO} activities={activities} onToggle={onToggleActivity}/>}
+        {!showDemo&&!viewingPast&&<ActivityRow types={activityTypes} todayISO={todayISO} activities={activities} onToggle={onToggleActivity}/>}
         {!showDemo&&onNachtragen&&(
           <button onClick={onNachtragen} style={{ display:'block', margin:'14px auto 0', padding:'8px 16px', background:'transparent', border:'0.5px solid rgba(41,38,27,0.2)', borderRadius:999, fontFamily:'system-ui', fontSize:13, fontWeight:500, color:'rgba(41,38,27,0.7)', cursor:'pointer' }}>＋ Vergangenen Tag nachtragen</button>
         )}
@@ -1386,7 +1278,7 @@ function JahrScreen({ stats, badges, accent, year=YEAR, levels={}, activityTypes
   };
   return (
     <div style={{ paddingBottom:110 }}>
-      <div style={{ padding:'64px 20px 14px' }}>
+      <div style={{ padding:'24px 20px 14px' }}>
         <div style={{ fontSize:12, letterSpacing:'.12em', color:'rgba(41,38,27,0.5)', textTransform:'uppercase', fontFamily:'system-ui', fontWeight:600 }}>Jahr</div>
         <div style={{ fontSize:13, color:'rgba(41,38,27,0.55)', marginTop:4, fontFamily:'Newsreader,serif', fontStyle:'italic' }}>Eine Karte zum Behalten oder Teilen.</div>
       </div>
@@ -1558,7 +1450,8 @@ function CheckinMoment({ motion, total, todayDate, accent, onDone }) {
 const ACCENT_OPTIONS = ['#6b6862','#6b7a4b','#b3543a','#4a5a6a'];
 
 // Vollbild-Dialog zum Nachtragen vergangener Tage (nutzt die editierbare Monatsansicht)
-function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, activities={}, activityTypes=[], onClose }) {
+function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLevel, routes={}, onSetRoutes, buddyWeeks=[], onToggleBuddyWeek, activities={}, activityTypes=[], onToggleActivity, onClose }) {
+  const [activityDate,setActivityDate]=React.useState(()=>year===YEAR?isoDay(TODAY):`${year}-01-01`);
   return (
     <div style={{ position:'absolute', inset:0, zIndex:150, background:'rgba(246,242,234,0.98)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', display:'flex', flexDirection:'column', padding:'calc(env(safe-area-inset-top) + 28px) 22px calc(env(safe-area-inset-bottom) + 24px)', overflowY:'auto' }}>
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
@@ -1574,6 +1467,13 @@ function NachtragenDialog({ year, checkins, accent, levels={}, onToggle, onSetLe
       <div style={{ marginTop:8 }}>
         <VizMonth stats={{ sortedDays: checkins }} accent={accent} todayISO={isoDay(TODAY)} year={year} levels={levels} onToggle={onToggle} onSetLevel={onSetLevel} routes={routes} onSetRoutes={onSetRoutes} buddyWeeks={buddyWeeks} onToggleBuddyWeek={onToggleBuddyWeek} activities={activities} activityTypes={activityTypes}/>
       </div>
+      {activityTypes.length>0&&<div style={{margin:'18px 0 24px',padding:16,background:'rgba(41,38,27,.04)',borderRadius:14}}>
+        <label style={{fontSize:13,fontWeight:600}}>Training nachtragen
+          <input aria-label="Trainingsdatum" type="date" value={activityDate} min={`${year}-01-01`} max={year===YEAR?isoDay(TODAY):`${year}-12-31`} onChange={(e)=>setActivityDate(e.target.value)} style={{display:'block',marginTop:8,padding:8,fontSize:16}}/>
+        </label>
+        <ActivityRow types={activityTypes} todayISO={activityDate} activities={activities} onToggle={activityDate&&activityDate.startsWith(`${year}-`)?onToggleActivity:null}/>
+        <div style={{fontSize:12,opacity:.65,marginTop:8}}>Trainings sind unabhängig von einem Boulder-Tag.</div>
+      </div>}
       <button onClick={onClose} style={{ marginTop:'auto', padding:'16px 24px', background:'#29261b', color:'#f6f2ea', border:0, borderRadius:16, fontFamily:'Newsreader,serif', fontSize:18, fontWeight:500, cursor:'pointer', boxShadow:'0 12px 30px rgba(41,38,27,0.18)' }}>Fertig</button>
     </div>
   );
@@ -1617,14 +1517,14 @@ function AuthCard({ onClose }) {
     if (!email || busy) return;
     setBusy(true); setError('');
     try {
-      const { error } = await supa.auth.signInWithOtp({ email, options:{ emailRedirectTo: window.location.href } });
+      const { error } = await supa.auth.signInWithOtp({ email, options:{ emailRedirectTo: window.location.origin+window.location.pathname } });
       if (error) throw error;
       setSent(true);
     } catch (err) { setError(err && err.message ? err.message : 'Anmeldung fehlgeschlagen.'); }
     finally { setBusy(false); }
   };
-  return (
-    <div style={{ position:'absolute', inset:0, zIndex:220, background:'rgba(41,38,27,0.4)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+  return ReactDOM.createPortal(
+    <div role="dialog" aria-modal="true" aria-label="Anmelden" style={{ position:'fixed', inset:0, zIndex:2147483647, background:'rgba(41,38,27,0.4)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
       <div style={{ width:'100%', maxWidth:320, background:'#ffffff', borderRadius:22, padding:'26px 24px', boxShadow:'0 18px 50px rgba(41,38,27,0.25)', position:'relative' }}>
         <button onClick={onClose} aria-label="Schließen" style={{ position:'absolute', top:14, right:14, width:30, height:30, borderRadius:'50%', border:0, background:'rgba(41,38,27,0.08)', color:'#29261b', fontSize:13, cursor:'pointer' }}>✕</button>
         {!sent ? (
@@ -1644,7 +1544,7 @@ function AuthCard({ onClose }) {
           </div>
         )}
       </div>
-    </div>
+    </div>, document.body
   );
 }
 
@@ -1689,370 +1589,229 @@ function DayEditor({ year, checkins, accent, onToggle }) {
 // Einmalige Migration: alte bouldering-sammelapp-Version speicherte Buddy-Wochen global
 // (sb-buddy-weeks) statt pro Jahr (sb-buddy-<jahr>). Läuft bei jedem Start, ist aber
 // nach dem ersten Mal ein No-Op, weil der alte Key danach entfernt ist.
-function migrateLegacyBuddyWeeks() {
-  try {
-    const legacyRaw = localStorage.getItem('sb-buddy-weeks');
-    if (!legacyRaw) return;
-    const legacyWeeks = JSON.parse(legacyRaw);
-    if (!Array.isArray(legacyWeeks) || !legacyWeeks.length) { localStorage.removeItem('sb-buddy-weeks'); return; }
-    const byYear = {};
-    legacyWeeks.forEach((wk) => {
-      const y = wk.split('-W')[0];
-      if (!byYear[y]) byYear[y] = new Set(loadBuddyWeeks(y));
-      byYear[y].add(wk);
-    });
-    Object.entries(byYear).forEach(([y, set]) => {
-      localStorage.setItem(`sb-buddy-${y}`, JSON.stringify([...set].sort()));
-    });
-    localStorage.removeItem('sb-buddy-weeks');
-  } catch {}
+// DB snapshots are the only writable app state. Legacy keys remain untouched.
+const Data = window.SammelbuchData;
+function legacyData() {
+  try { return {snapshot:Data.readLegacy(localStorage),error:''}; }
+  catch (error) { return {snapshot:Data.emptySnapshot(),error:error.message}; }
 }
-
-function loadAppData() {
-  migrateLegacyBuddyWeeks();
-  try {
-    return {
-      checkins: JSON.parse(localStorage.getItem(`sb-checkins-${YEAR}`) || '[]'),
-      levels: loadLevels(YEAR),
-      routes: loadRoutes(YEAR),
-      buddyWeeks: loadBuddyWeeks(YEAR),
-      goal: JSON.parse(localStorage.getItem('sb-goal') || '40'),
-      accent: localStorage.getItem('sb-accent') || '#6b6862',
-      buddyName: localStorage.getItem('sb-buddy-name') || '',
-      onboarded: !!localStorage.getItem('sb-onboarded'),
-    };
-  } catch { return { checkins:[], levels:{}, routes:{}, buddyWeeks:[], goal:40, accent:'#6b6862', buddyName:'', onboarded:false }; }
+function legacySignature(snapshot) {
+  const value=JSON.stringify(snapshot); let hash=2166136261;
+  for (let i=0;i<value.length;i++) hash=Math.imul(hash^value.charCodeAt(i),16777619);
+  return String(hash>>>0);
 }
 
 function App() {
-  const [tab, setTab]=React.useState('sammeln');
-  const [viz, setViz]=React.useState('heat');
-  const [motion, setMotion]=React.useState('stamp');
-  const [showDemo, setShowDemo]=React.useState(false);
-  const [appData, setAppData]=React.useState(loadAppData);
-  const [year, setYear]=React.useState(YEAR);          // angezeigtes Jahr (Archiv-Ansicht)
-  const [checkinActive, setCheckinActive]=React.useState(false);
-  const [onboardingActive, setOnboardingActive]=React.useState(!loadAppData().onboarded);
-  const [nachtragenOpen, setNachtragenOpen]=React.useState(false);
-  const [levelPromptISO, setLevelPromptISO]=React.useState(null);  // Tag, für den nach dem Stempeln die Stufe abgefragt wird
-  const [supaUser, setSupaUser]=React.useState(null);
-  const [syncState, setSyncState]=React.useState('idle');   // idle | syncing | synced | error
-  const [authOpen, setAuthOpen]=React.useState(false);
-  const [activityTypes, setActivityTypes]=React.useState(loadActivityTypes);
-  const [activities, setActivities]=React.useState(()=>loadActivities(YEAR));
-  const [horoskopVisible, setHoroskopVisible]=React.useState(false);
-  const [newlyEarnedBadges, setNewlyEarnedBadges]=React.useState([]);
+  const [tab,setTab]=React.useState('sammeln');
+  const [viz,setViz]=React.useState('heat');
+  const [motion,setMotion]=React.useState('stamp');
+  const [showDemo,setShowDemo]=React.useState(false);
+  const [year,setYear]=React.useState(YEAR);
+  const [checkinActive,setCheckinActive]=React.useState(false);
+  const [nachtragenOpen,setNachtragenOpen]=React.useState(false);
+  const [authOpen,setAuthOpen]=React.useState(false);
+  const [horoskopVisible,setHoroskopVisible]=React.useState(false);
+  const [newlyEarnedBadges,setNewlyEarnedBadges]=React.useState([]);
+  const [levelPromptISO,setLevelPromptISO]=React.useState(null);
+  const [notice,setNotice]=React.useState('');
+  const [authReady,setAuthReady]=React.useState(false);
+  const [legacy]=React.useState(legacyData);
+  const [legacyClaim,setLegacyClaim]=React.useState(()=>localStorage.getItem('sammelbuch-legacy-import-v2')||'');
+  const [cloud,setCloud]=React.useState({user:null,snapshot:Data.emptySnapshot(),status:'loading',ready:false,busy:false,error:'',lastSynced:null});
   const fileInputRef=React.useRef(null);
-  const yearRef=React.useRef(year);
-  React.useEffect(()=>{ yearRef.current=year; },[year]);
-
-  // Remove loading indicator once React has mounted
-  React.useEffect(() => { document.getElementById('loading')?.remove(); }, []);
-
-  // Tageshoroskop einmal pro Tag beim App-Öffnen zeigen, falls schon onboarded und heute noch nicht gesehen
-  React.useEffect(()=>{
-    if (!loadAppData().onboarded) return;
-    if (hasSeenHoroskopToday(isoDay(TODAY))) return;
-    const t=setTimeout(()=>setHoroskopVisible(true), 900);
-    return ()=>clearTimeout(t);
-  },[]);
-
-  // Cloud-Stand für ein Jahr laden und als lokalen Cache (localStorage) + State übernehmen
-  const syncFromCloud=React.useCallback(async(y)=>{
-    setSyncState('syncing');
-    try {
-      const [{ checkins, levels, routes }, settings, buddyWeeks] = await Promise.all([
-        dbLoadYear(y), dbLoadSettings(), dbLoadBuddyWeeks(y),
-      ]);
-      localStorage.setItem(`sb-checkins-${y}`, JSON.stringify(checkins));
-      if (Object.keys(levels).length) localStorage.setItem(`sb-levels-${y}`, JSON.stringify(levels)); else localStorage.removeItem(`sb-levels-${y}`);
-      if (Object.keys(routes).length) localStorage.setItem(`sb-routes-${y}`, JSON.stringify(routes)); else localStorage.removeItem(`sb-routes-${y}`);
-      if (buddyWeeks.length) localStorage.setItem(`sb-buddy-${y}`, JSON.stringify(buddyWeeks)); else localStorage.removeItem(`sb-buddy-${y}`);
-      if (settings) {
-        if (settings.goal!=null) localStorage.setItem('sb-goal', JSON.stringify(settings.goal));
-        if (settings.accent) localStorage.setItem('sb-accent', settings.accent);
-        localStorage.setItem('sb-buddy-name', settings.buddy_name||'');
-      }
-      localStorage.setItem('sb-onboarded','1');
-      setAppData({
-        checkins: loadCheckins(y), levels: loadLevels(y), routes: loadRoutes(y), buddyWeeks: loadBuddyWeeks(y),
-        goal: JSON.parse(localStorage.getItem('sb-goal')||'40'), accent: localStorage.getItem('sb-accent')||'#6b6862',
-        buddyName: localStorage.getItem('sb-buddy-name')||'', onboarded:true,
-      });
-      setOnboardingActive(false);
-      setSyncState('synced');
-    } catch { setSyncState('error'); }
-  },[]);
-
-  // Login-Status beobachten: bestehende Session laden, bei Anmeldung lokale Daten migrieren + syncen
-  React.useEffect(()=>{
-    let active=true;
-    supa.auth.getSession().then(({ data:{ session } })=>{
-      if (!active) return;
-      const u=session?.user ?? null;
-      setSupaUser(u);
-      if (u) syncFromCloud(yearRef.current);
-    });
-    const { data:sub } = supa.auth.onAuthStateChange((event, session)=>{
-      const u=session?.user ?? null;
-      setSupaUser(u);
-      if (event==='SIGNED_IN' && u) dbMigrateLocal().then(()=>syncFromCloud(yearRef.current));
-    });
-    return ()=>{ active=false; sub.subscription.unsubscribe(); };
-  },[syncFromCloud]);
-
-  // Bei Jahreswechsel, während eingeloggt: Cloud-Stand für das neu gewählte Jahr nachladen
-  React.useEffect(()=>{ if (supaUser) syncFromCloud(year); },[year]);
-
-  // Auth-Overlay automatisch schliessen, sobald die Anmeldung erfolgreich war
-  React.useEffect(()=>{ if (supaUser) setAuthOpen(false); },[supaUser]);
-
-  // Check-ins & Level neu laden, wenn das angezeigte Jahr wechselt
-  React.useEffect(()=>{ setAppData((d)=>({...d, checkins: loadCheckins(year), levels: loadLevels(year), routes: loadRoutes(year), buddyWeeks: loadBuddyWeeks(year)})); setActivities(loadActivities(year)); },[year]);
-
-  // Aktivitäten-Typen sind rein lokal (kein Cloud-Sync) — unabhängig vom Boulder-Check-in eines Tages
-  const setActivityTypesPersist=(types)=>{ saveActivityTypes(types); setActivityTypes(types); };
-  const toggleActivity=(iso, typeId)=>{
-    const map={...activities};
-    const curr=new Set(map[iso]||[]);
-    if (curr.has(typeId)) curr.delete(typeId); else curr.add(typeId);
-    if (curr.size>0) map[iso]=[...curr]; else delete map[iso];
-    saveActivities(year,map); setActivities(map);
-  };
-
+  const storeRef=React.useRef(null);
+  if (!storeRef.current) storeRef.current=window.SammelbuchCloud.createStore({client:supa,storage:localStorage,onChange:setCloud,online:()=>navigator.onLine});
+  const store=storeRef.current;
+  const supaUser=cloud.user;
+  const canEdit=!!supaUser&&cloud.ready&&!cloud.busy&&navigator.onLine&&!showDemo;
+  const snapshot=cloud.snapshot;
+  const appData=Data.yearView(snapshot,year);
+  const activityTypes=snapshot.activityTypes;
+  const activities=appData.activities;
   const todayISO=isoDay(TODAY);
-
-  const activeCheckins=React.useMemo(()=>{
-    if (showDemo) return DEMO_CHECKINS;
-    return appData.checkins;
-  },[showDemo,appData.checkins]);
-  const activeLevels = showDemo ? {} : appData.levels;
-  const activeRoutes = showDemo ? {} : appData.routes;
-  const activeActivities = showDemo ? {} : activities;
-  const activeBuddyWeeks = showDemo ? [] : appData.buddyWeeks;
-
+  const signature=legacySignature(legacy.snapshot);
+  const hasLegacy=Data.hasData(legacy.snapshot);
+  const canImportLegacy=hasLegacy&&!legacyClaim;
+  const years=Data.years(snapshot,YEAR);
+  const activeCheckins=showDemo?DEMO_CHECKINS:appData.checkins;
+  const activeLevels=showDemo?{}:appData.levels;
+  const activeRoutes=showDemo?{}:appData.routes;
+  const activeActivities=showDemo?{}:activities;
+  const activeBuddyWeeks=showDemo?[]:appData.buddyWeeks;
   const stats=React.useMemo(()=>computeStats(activeCheckins),[activeCheckins]);
   const badges=React.useMemo(()=>earnedBadges(stats),[stats]);
   const checkedInToday=activeCheckins.includes(todayISO);
 
-  const onCheckin=()=>{ if (!showDemo && !checkedInToday && year===YEAR) setCheckinActive(true); };
-  const onCheckinDone=()=>{
-    setCheckinActive(false);
-    if (!showDemo && !checkedInToday) {
-      const next=[...new Set([...appData.checkins,todayISO])];
-      const prevEarned=new Set(badges.filter((b)=>b.earned).map((b)=>b.id));
-      const justEarned=earnedBadges(computeStats(next)).filter((b)=>b.earned&&!prevEarned.has(b.id));
-      localStorage.setItem(`sb-checkins-${YEAR}`,JSON.stringify(next));
-      setAppData((d)=>({...d,checkins:next}));
-      if (justEarned.length>0) setNewlyEarnedBadges(justEarned);
-      else setLevelPromptISO(todayISO);   // optionale Stufen-Rückfrage einblenden
-      if (supaUser) dbUpsertCheckin(todayISO, YEAR, 'normal').catch(()=>setSyncState('error'));
+  React.useEffect(()=>{
+    document.getElementById('loading')?.remove();
+    let active=true, authRevision=0;
+    const {data:{subscription}}=supa.auth.onAuthStateChange((event,session)=>{
+      const revision=++authRevision;
+      // Supabase auth callbacks must finish before another Supabase call starts.
+      setTimeout(()=>{
+        if (!active||revision!==authRevision) return;
+        const user=session?.user||null;
+        const changed=store.getState().user?.id!==user?.id;
+        store.setUser(user);
+        setAuthReady(true);
+        if (changed) {setNotice('');setNachtragenOpen(false);setCheckinActive(false);setNewlyEarnedBadges([]);setLevelPromptISO(null);setHoroskopVisible(false);setShowDemo(false);setYear(YEAR);}
+        if (user) {setAuthOpen(false);store.refresh();}
+      },0);
+    });
+    const refresh=()=>{if (!document.hidden) store.refresh();};
+    const offline=()=>store.refresh();
+    window.addEventListener('online',refresh);
+    window.addEventListener('offline',offline);
+    window.addEventListener('focus',refresh);
+    document.addEventListener('visibilitychange',refresh);
+    const timer=setInterval(refresh,30000);
+    return ()=>{active=false;subscription.unsubscribe();clearInterval(timer);window.removeEventListener('online',refresh);window.removeEventListener('offline',offline);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
+  },[]);
+
+  React.useEffect(()=>{
+    if (!supaUser||!appData.onboarded) return;
+    const key=`sammelbuch-horoskop-seen:${supaUser.id}`;
+    if (localStorage.getItem(key)===todayISO) return;
+    const timer=setTimeout(()=>{
+      if (store.getState().user?.id!==supaUser.id) return;
+      setHoroskopVisible(true);
+      try {localStorage.setItem(key,todayISO);} catch {}
+    },900);
+    return ()=>clearTimeout(timer);
+  },[supaUser?.id,appData.onboarded,todayISO]);
+
+  const mutate=async(command)=>{
+    if (!supaUser) {setAuthOpen(true);return false;}
+    setNotice('');
+    return store.mutate(command);
+  };
+  const onCheckin=async()=>{
+    if (!canEdit||checkedInToday||year!==YEAR) return;
+    const before=new Set(badges.filter(b=>b.earned).map(b=>b.id));
+    if (await mutate({kind:'checkin',date:todayISO,on:true})) {
+      const fresh=Data.yearView(store.getState().snapshot,YEAR);
+      setNewlyEarnedBadges(earnedBadges(computeStats(fresh.checkins)).filter(b=>b.earned&&!before.has(b.id)));
+      setCheckinActive(true);
     }
   };
-
-  // Konfetti-Moment(e) der Reihe nach abarbeiten, danach optionale Stufen-Rückfrage
+  const onCheckinDone=()=>{setCheckinActive(false);if(newlyEarnedBadges.length===0)setLevelPromptISO(todayISO);};
   const onBadgeUnlockDone=()=>{
-    const rest=newlyEarnedBadges.slice(1);
-    setNewlyEarnedBadges(rest);
-    if (rest.length===0) setLevelPromptISO(todayISO);
+    const remaining=newlyEarnedBadges.slice(1);
+    setNewlyEarnedBadges(remaining);
+    if(remaining.length===0)setLevelPromptISO(todayISO);
   };
-
-  // Anstrengungs-Stufe eines Tages setzen (sparse: 'normal' = kein Eintrag)
-  const setDayLevel=(iso, level)=>{
-    const map={...loadLevels(year)};
-    if (level==='normal') delete map[iso]; else map[iso]=level;
-    if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map));
-    else localStorage.removeItem(`sb-levels-${year}`);
-    setAppData((d)=>({...d,levels:map}));
-    if (supaUser) dbUpsertCheckin(iso, year, level).catch(()=>setSyncState('error'));
+  const toggleDay=(date)=>mutate({kind:'checkin',date,on:!appData.checkins.includes(date)});
+  const setDayLevel=(date,level)=>mutate({kind:'level',date,level});
+  const setRouteCounts=(date,color,value)=>mutate({kind:'route',date,color,value});
+  const toggleBuddyWeek=(week,on)=>mutate({kind:'buddy',week,on});
+  const toggleActivity=(date,typeId)=>mutate({kind:'activity',date,typeId,on:!(activities[date]||[]).includes(typeId)});
+  const setGoal=(goal)=>mutate({kind:'settings',patch:{goal,onboarded:true}});
+  const setAccent=(accent)=>mutate({kind:'settings',patch:{accent}});
+  const setBuddyName=(buddy_name)=>mutate({kind:'settings',patch:{buddy_name}});
+  const setActivityTypesPersist=async(types)=>{
+    const added=types.find(t=>!activityTypes.some(old=>old.id===t.id));
+    if (added) return mutate({kind:'type_upsert',...added});
+    const removed=activityTypes.find(t=>!types.some(next=>next.id===t.id));
+    if (removed&&confirm(`„${removed.label}“ und alle zugehörigen Trainingseinträge auf allen Geräten löschen?`)) return mutate({kind:'type_delete',id:removed.id});
+    return false;
   };
-
-  // Routen-Farbzählung eines Tages ändern (eine Farbe pro Aufruf)
-  const setRouteCounts=(iso, colorKey, value)=>{
-    const map={...loadRoutes(year)};
-    const dayCounts={...(map[iso]||{})};
-    if (value>0) dayCounts[colorKey]=value; else delete dayCounts[colorKey];
-    if (Object.keys(dayCounts).length) map[iso]=dayCounts; else delete map[iso];
-    if (Object.keys(map).length) localStorage.setItem(`sb-routes-${year}`,JSON.stringify(map));
-    else localStorage.removeItem(`sb-routes-${year}`);
-    setAppData((d)=>({...d,routes:map}));
-    if (supaUser) dbUpsertRoutes(iso, year, dayCounts).catch(()=>setSyncState('error'));
-  };
-
-  // Buddy-Woche ein-/ausschalten
-  const toggleBuddyWeek=(weekKey, on)=>{
-    const wYear=weekKey.split('-W')[0];
-    const cur=new Set(loadBuddyWeeks(wYear));
-    if (on) cur.add(weekKey); else cur.delete(weekKey);
-    const next=[...cur].sort();
-    if (next.length) localStorage.setItem(`sb-buddy-${wYear}`,JSON.stringify(next));
-    else localStorage.removeItem(`sb-buddy-${wYear}`);
-    if (Number(wYear)===Number(year)) setAppData((d)=>({...d,buddyWeeks:next}));
-    if (supaUser) dbToggleBuddyWeek(weekKey, on).catch(()=>setSyncState('error'));
-  };
-
-  const pushSettings=(overrides)=>{
-    if (!supaUser) return;
-    dbSaveSettings({
-      goal: overrides.goal ?? appData.goal,
-      accent: overrides.accent ?? appData.accent,
-      buddy_name: overrides.buddyName ?? appData.buddyName,
-    }).catch(()=>setSyncState('error'));
-  };
-  const setGoal=(goal)=>{
-    localStorage.setItem('sb-goal',JSON.stringify(goal));
-    setAppData((d)=>({...d,goal}));
-    pushSettings({goal});
-  };
-  const setAccent=(accent)=>{
-    localStorage.setItem('sb-accent',accent);
-    setAppData((d)=>({...d,accent}));
-    pushSettings({accent});
-  };
-  const setBuddyName=(buddyName)=>{
-    localStorage.setItem('sb-buddy-name',buddyName);
-    setAppData((d)=>({...d,buddyName}));
-    pushSettings({buddyName});
-  };
-  // Einzelnen Tag im angezeigten Jahr nachtragen/löschen
-  const toggleDay=(iso)=>{
-    const cur=new Set(loadCheckins(year));
-    const removing=cur.has(iso);
-    if (removing) cur.delete(iso); else cur.add(iso);
-    const next=[...cur].sort();
-    localStorage.setItem(`sb-checkins-${year}`,JSON.stringify(next));
-    // beim Entfernen auch die Stufe löschen
-    let map=loadLevels(year);
-    if (removing && map[iso]) { map={...map}; delete map[iso];
-      if (Object.keys(map).length) localStorage.setItem(`sb-levels-${year}`,JSON.stringify(map)); else localStorage.removeItem(`sb-levels-${year}`);
-    }
-    setAppData((d)=>({...d,checkins:next,levels:map}));
-    if (supaUser) {
-      if (removing) dbDeleteCheckin(iso).catch(()=>setSyncState('error'));
-      else dbUpsertCheckin(iso, year, 'normal').catch(()=>setSyncState('error'));
-    }
-  };
-
-  // Backup: alle sb-* Schlüssel als JSON-Datei herunterladen
-  const exportData=()=>{
-    const data={};
-    for (let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if (k && k.startsWith('sb-')) data[k]=localStorage.getItem(k); }
-    const payload={ app:'sammelbuch', version:1, exportedAt:new Date().toISOString(), data };
-    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download=`sammelbuch-backup-${isoDay(TODAY)}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
+  const saveBackup=(data,suffix='')=>{
+    const blob=new Blob([JSON.stringify(Data.backup(data),null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');
+    a.href=url;a.download=`sammelbuch-backup-${todayISO}${suffix}.json`;a.click();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
-
-  // Backup einlesen: sb-* Schlüssel überschreiben und Ansicht neu laden
-  const importData=(file)=>{
-    const r=new FileReader();
-    r.onload=()=>{
-      try {
-        const parsed=JSON.parse(r.result);
-        const d=parsed.data||parsed;
-        let n=0;
-        Object.entries(d).forEach(([k,v])=>{ if (k.startsWith('sb-')){ localStorage.setItem(k, typeof v==='string'?v:JSON.stringify(v)); n++; } });
-        if (!n) { alert('Keine Sammelbuch-Daten in der Datei gefunden.'); return; }
-        const fresh=loadAppData();
-        setAppData({...fresh, checkins:loadCheckins(year), levels:loadLevels(year)});
-        setActivityTypes(loadActivityTypes());
-        setActivities(loadActivities(year));
-        setOnboardingActive(false);
-        alert(`Backup geladen ✓ (${n} Einträge)`);
-      } catch { alert('Konnte die Datei nicht lesen. Ist es ein Sammelbuch-Backup?'); }
-    };
-    r.readAsText(file);
+  const exportData=async()=>{
+    if (supaUser&&navigator.onLine) {
+      if (!await store.refresh()) {setNotice('Backup nicht erstellt: Der aktuelle Datenbankstand konnte nicht geladen werden.');return;}
+    }
+    saveBackup(store.getState().snapshot, navigator.onLine?'':'-zwischengespeichert');
   };
-
-  const resetAll=()=>{
-    if (!confirm(`Wirklich alle Daten für ${year} zurücksetzen? Mach vorher ein Backup.`)) return;
-    localStorage.removeItem(`sb-checkins-${year}`);
-    localStorage.removeItem(`sb-levels-${year}`);
-    if (year===YEAR) {
-      localStorage.removeItem('sb-goal');
-      localStorage.removeItem('sb-accent');
-      localStorage.removeItem('sb-onboarded');
-      setAppData({checkins:[],levels:{},goal:40,accent:'#6b6862',onboarded:false});
-      setOnboardingActive(true);
-    } else {
-      setAppData((d)=>({...d,checkins:[],levels:{}}));
+  const importData=async(file)=>{
+    try {
+      if (file.size>10*1024*1024) throw new Error('Die Datei ist grösser als 10 MB.');
+      const importUserId=supaUser?.id;
+      const data=Data.parseBackup(JSON.parse(await file.text()));
+      if(!importUserId||store.getState().user?.id!==importUserId) throw new Error('Das Konto hat gewechselt. Bitte die Datei erneut auswählen.');
+      if (!Data.hasData(data)) throw new Error('Keine Sammelbuch-Daten in der Datei gefunden.');
+      if (!confirm(`Backup in das Konto ${supaUser.email} übernehmen? Neue Einträge werden ergänzt, bestehende Tage und Kontoeinstellungen bleiben erhalten.`)) return;
+      if (await mutate({kind:'import',data})) setNotice('Backup in der Datenbank gespeichert. Auf deinen anderen Geräten wird es beim Öffnen geladen.');
+    } catch(error) {setNotice(`Import nicht durchgeführt: ${error.message}`);}
+  };
+  const importLocal=async()=>{
+    if (!canEdit) return;
+    if (!confirm(`Die lokalen Daten dieses Geräts in ${supaUser.email} übernehmen? Prüfe, dass dies dein Konto und der gewünschte Datenbestand ist.`)) return;
+    if (await mutate({kind:'import',data:legacy.snapshot})) {
+      const claim=JSON.stringify({userId:supaUser.id,signature});
+      try {localStorage.setItem('sammelbuch-legacy-import-v2',claim);} catch {}
+      setLegacyClaim(claim);
+      setNotice('Lokale Daten erfolgreich in der Datenbank gespeichert.');
     }
   };
-
-  const years=availableYears();
+  const resetAll=async()=>{
+    if (!canEdit||!confirm(`Alle Boulder-Tage, Routen, Buddy-Wochen und Trainingseinträge für ${year} auf allen Geräten löschen? Sichere vorher ein Backup.`)) return;
+    if (await mutate({kind:'reset_year',year})) setNotice(`${year} wurde in der Datenbank zurückgesetzt.`);
+  };
+  const signOut=async()=>{
+    if (cloud.busy) return;
+    const {error}=await supa.auth.signOut({scope:'local'});
+    if (error) setNotice(`Abmelden fehlgeschlagen: ${error.message}`);
+  };
+  const statusText=!authReady?'Anmeldung wird geprüft…':!supaUser?'Melde dich an, um deine Daten auf allen Geräten zu nutzen.':cloud.status==='loading'?'Datenbank wird geladen…':cloud.status==='syncing'?'Wird in der Datenbank gespeichert…':cloud.status==='offline'?'Offline · letzter geladener Stand. Zum Speichern brauchst du eine Verbindung.':cloud.status==='error'?(cloud.error||'Die Datenbank ist momentan nicht erreichbar.'):cloud.ready?'In der Datenbank gespeichert ✓':'Letzter geladener Stand · Verbindung wird geprüft…';
+  const statusPanel=(compact=false)=>(
+    <div style={{fontSize:compact?11:13,lineHeight:1.5}}>
+      {supaUser&&<div style={{fontWeight:600,wordBreak:'break-all'}}>{supaUser.email}</div>}
+      <div role="status" aria-live="polite">{statusText}</div>
+      {supaUser&&cloud.lastSynced&&<div style={{opacity:.65,fontSize:11}}>Zuletzt geladen: {new Date(cloud.lastSynced).toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})}</div>}
+      {authReady&&!supaUser&&<button className="twk-btn" style={{marginTop:8}} onClick={()=>setAuthOpen(true)}>Anmelden</button>}
+      {supaUser&&<button className="twk-btn secondary" disabled={cloud.busy} style={{marginTop:8}} onClick={()=>store.refresh()}>Jetzt aktualisieren</button>}
+    </div>
+  );
 
   return (
     <IOSDevice>
-      <input ref={fileInputRef} type="file" accept="application/json,.json" style={{display:'none'}}
-        onChange={(e)=>{ const f=e.target.files&&e.target.files[0]; if (f) importData(f); e.target.value=''; }}/>
-      <div style={{ position:'absolute', inset:0, background:'#ffffff', color:'#29261b', overflow:'hidden' }}>
-        <div style={{ position:'absolute', inset:0, overflowY:'auto', overflowX:'hidden', WebkitOverflowScrolling:'touch' }}>
-          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onToggleDay={toggleDay} onSetLevel={setDayLevel} onNachtragen={()=>setNachtragenOpen(true)} activityTypes={activityTypes} activities={activeActivities} onToggleActivity={toggleActivity} checkins={activeCheckins} buddyWeeks={activeBuddyWeeks} buddyName={appData.buddyName} onBuddyConfirm={(wk)=>toggleBuddyWeek(wk,true)}/>}
+      <input ref={fileInputRef} type="file" accept="application/json,.json" style={{display:'none'}} onChange={(e)=>{const file=e.target.files?.[0];if(file) importData(file);e.target.value='';}}/>
+      <div style={{position:'relative',minHeight:'100dvh'}}>
+        <div style={{padding:'58px 20px 12px',background:'rgba(41,38,27,.035)',borderBottom:'1px solid rgba(41,38,27,.08)'}}>{statusPanel()}</div>
+        {notice&&<div role="alert" style={{padding:'12px 20px',fontSize:13,background:'#f6f2ea'}}>{notice}<button aria-label="Hinweis schliessen" onClick={()=>setNotice('')} style={{float:'right',border:0,background:'none'}}>✕</button></div>}
+        {legacy.error&&<div role="alert" style={{padding:'12px 20px',fontSize:13}}>Lokale Altdaten konnten nicht gelesen werden: {legacy.error}. Sie bleiben unverändert auf diesem Gerät.</div>}
+        {canImportLegacy&&<div style={{padding:'14px 20px',fontSize:13,background:'#f6f2ea',lineHeight:1.5}}>
+          <strong>Auf diesem Gerät liegen noch lokale Daten.</strong>
+          <div>{legacy.snapshot.checkins.length} Boulder-Tage · {legacy.snapshot.activities.length} Trainingseinträge. Übernimm sie einmal in dein Konto.</div>
+          <button className="twk-btn" disabled={!canEdit} style={{marginTop:8}} onClick={importLocal}>Lokale Daten übernehmen</button>
+          <button className="twk-btn secondary" style={{margin:'8px 0 0 8px'}} onClick={()=>saveBackup(legacy.snapshot,'-lokal')}>Lokale Daten sichern</button>
+        </div>}
+        <div style={{position:'relative',zIndex:1}}>
+          {tab==='sammeln'&&<SammelnScreen stats={stats} accent={appData.accent} viz={viz} setViz={setViz} goal={appData.goal} onCheckin={onCheckin} checkedInToday={checkedInToday} todayISO={todayISO} showDemo={showDemo} year={year} levels={activeLevels} routes={activeRoutes} onNachtragen={()=>setNachtragenOpen(true)} activityTypes={activityTypes} activities={activeActivities} onToggleActivity={canEdit?toggleActivity:null} checkins={activeCheckins} buddyWeeks={activeBuddyWeeks} buddyName={appData.buddyName} onBuddyConfirm={canEdit?(week)=>toggleBuddyWeek(week,true):null} canEdit={canEdit}/>}
           {tab==='erfolge'&&<ErfolgeScreen stats={stats} badges={badges}/>}
           {tab==='jahr'&&<JahrScreen stats={stats} badges={badges} accent={appData.accent} year={year} levels={activeLevels} activityTypes={activityTypes} activities={activeActivities}/>}
         </div>
         <BottomNav tab={tab} setTab={setTab}/>
-        {checkinActive&&<CheckinMoment motion={motion} total={stats.total+(checkedInToday?0:1)} todayDate={TODAY} accent={appData.accent} onDone={onCheckinDone}/>}
-        {onboardingActive&&<Onboarding accent={appData.accent} onDone={(goal)=>{ setGoal(goal); localStorage.setItem('sb-onboarded','1'); setAppData((d)=>({...d,onboarded:true,goal})); setOnboardingActive(false); }}/>}
-        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={toggleDay} onSetLevel={setDayLevel} routes={appData.routes} onSetRoutes={setRouteCounts} buddyWeeks={appData.buddyWeeks} onToggleBuddyWeek={toggleBuddyWeek} activities={activities} activityTypes={activityTypes} onClose={()=>setNachtragenOpen(false)}/>}
-        {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(lv)=>{ setDayLevel(levelPromptISO,lv); setLevelPromptISO(null); }} onClose={()=>setLevelPromptISO(null)}/>}
+        {checkinActive&&<CheckinMoment motion={motion} total={stats.total} todayDate={TODAY} accent={appData.accent} onDone={onCheckinDone}/>}
+        {nachtragenOpen&&<NachtragenDialog year={year} checkins={appData.checkins} accent={appData.accent} levels={appData.levels} onToggle={canEdit?toggleDay:null} onSetLevel={canEdit?setDayLevel:null} routes={appData.routes} onSetRoutes={canEdit?setRouteCounts:null} buddyWeeks={appData.buddyWeeks} onToggleBuddyWeek={canEdit?toggleBuddyWeek:null} activities={activities} activityTypes={activityTypes} onToggleActivity={canEdit?toggleActivity:null} onClose={()=>setNachtragenOpen(false)}/>}
         {authOpen&&<AuthCard onClose={()=>setAuthOpen(false)}/>}
         {horoskopVisible&&<HoroskopMoment stats={stats} todayISO={todayISO} onDone={()=>setHoroskopVisible(false)}/>}
-        {newlyEarnedBadges.length>0&&<BadgeUnlockMoment badge={newlyEarnedBadges[0]} onDone={onBadgeUnlockDone}/>}
+        {!checkinActive&&newlyEarnedBadges.length>0&&<BadgeUnlockMoment badge={newlyEarnedBadges[0]} onDone={onBadgeUnlockDone}/>}
+        {levelPromptISO&&<LevelPrompt accent={appData.accent} currentLevel={appData.levels[levelPromptISO]||'normal'} onPick={(level)=>{setLevelPromptISO(null);setDayLevel(levelPromptISO,level);}} onClose={()=>setLevelPromptISO(null)}/>}
       </div>
-
-      <TweaksPanel title="Tweaks">
-        <TweakSection label="Synchronisation">
-          {supaUser ? (
-            <>
-              <div className="twk-row">
-                <div className="twk-lbl"><span>Angemeldet als</span></div>
-                <div style={{ fontSize:11, color:'rgba(41,38,27,.7)', wordBreak:'break-all' }}>{supaUser.email}</div>
-              </div>
-              <div style={{ fontSize:10, color:'rgba(41,38,27,.45)' }}>
-                {syncState==='syncing'?'Synchronisiere…':syncState==='error'?'Sync-Fehler — lokal gespeichert.':'Synchronisiert ✓'}
-              </div>
-              <TweakButton label="Abmelden" secondary onClick={()=>supa.auth.signOut()}/>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize:10, color:'rgba(41,38,27,.45)', lineHeight:1.4 }}>Nicht angemeldet — Daten bleiben lokal auf diesem Gerät.</div>
-              <TweakButton label="Anmelden" onClick={()=>setAuthOpen(true)}/>
-            </>
-          )}
+      <TweaksPanel title="Einstellungen">
+        <TweakSection label="Dein Konto">
+          {statusPanel(true)}
+          {supaUser&&<button className="twk-btn secondary" disabled={cloud.busy} onClick={signOut}>Auf diesem Gerät abmelden</button>}
         </TweakSection>
-        <TweakSection label="Stil">
-          <TweakColor label="Akzent" value={appData.accent} options={ACCENT_OPTIONS} onChange={setAccent}/>
-        </TweakSection>
-        <TweakSection label="Visualisierung">
-          <TweakRadio label="Ansicht" value={viz} options={[{value:'heat',label:'Jahr'},{value:'month',label:'Monat'}]} onChange={setViz}/>
-          <TweakSlider label="Jahresziel" value={appData.goal} min={10} max={120} step={5} unit=" Bes." onChange={setGoal}/>
-        </TweakSection>
-        <TweakSection label="Check-in">
-          <TweakRadio label="Animation" value={motion} options={[{value:'stamp',label:'Stempel'},{value:'fill',label:'Füllen'},{value:'rustle',label:'Rascheln'}]} onChange={setMotion}/>
-        </TweakSection>
-        {years.length>1&&(
-          <TweakSection label="Jahr">
-            <TweakRadio label="Anzeigen" value={year} options={years.map((y)=>({value:y,label:String(y)}))} onChange={setYear}/>
-          </TweakSection>
-        )}
-        <TweakSection label="Tage nachtragen">
-          <DayEditor year={year} checkins={appData.checkins} accent={appData.accent} onToggle={toggleDay}/>
-        </TweakSection>
-        <TweakSection label="Aktivitäten">
-          <TweakActivityEditor types={activityTypes} onChange={setActivityTypesPersist}/>
-        </TweakSection>
-        <TweakSection label="Buddy Streak">
-          <TweakInput label="Name des Buddy" value={appData.buddyName} placeholder="z. B. Sam" onChange={setBuddyName}/>
-        </TweakSection>
+        <fieldset key={supaUser?.id||'signed-out'} disabled={!canEdit} style={{border:0,padding:0,margin:0,display:'contents'}}>
+          <TweakSection label="Stil"><TweakColor label="Akzent" value={appData.accent} options={ACCENT_OPTIONS} onChange={setAccent}/></TweakSection>
+          <TweakSection label="Jahresziel"><TweakInput label="Besuche pro Jahr" value={String(appData.goal)} onChange={(value)=>{const goal=Number(value);if(Number.isInteger(goal)&&goal>=1&&goal<=10000)return setGoal(goal);setNotice('Bitte ein Jahresziel zwischen 1 und 10000 eingeben.');return false;}}/></TweakSection>
+          <TweakSection label="Aktivitäten"><TweakActivityEditor types={activityTypes} onChange={setActivityTypesPersist}/></TweakSection>
+          <TweakSection label="Buddy Streak"><TweakInput label="Name des Buddy" value={appData.buddyName} placeholder="z. B. Sam" onChange={setBuddyName}/></TweakSection>
+        </fieldset>
+        <TweakSection label="Ansicht"><TweakRadio label="Visualisierung" value={viz} options={[{value:'heat',label:'Jahr'},{value:'month',label:'Monat'}]} onChange={setViz}/><TweakRadio label="Animation" value={motion} options={[{value:'stamp',label:'Stempel'},{value:'fill',label:'Füllen'},{value:'rustle',label:'Rascheln'}]} onChange={setMotion}/></TweakSection>
+        {years.length>1&&<TweakSection label="Jahr"><TweakRadio label="Anzeigen" value={year} options={years.map(y=>({value:y,label:String(y)}))} onChange={setYear}/></TweakSection>}
         <TweakSection label="Daten">
-          <TweakButton label="Backup sichern (Download)" secondary onClick={exportData}/>
-          <TweakButton label="Backup laden" secondary onClick={()=>fileInputRef.current&&fileInputRef.current.click()}/>
+          <button className="twk-btn secondary" disabled={!supaUser||cloud.busy} onClick={exportData}>Backup sichern (Download)</button>
+          <button className="twk-btn secondary" disabled={!canEdit} onClick={()=>fileInputRef.current?.click()}>Backup in Konto übernehmen</button>
           <TweakToggle label="Demo-Daten anzeigen" value={showDemo} onChange={setShowDemo}/>
-          <TweakButton label={`${year} zurücksetzen`} secondary onClick={resetAll}/>
+          <button className="twk-btn secondary" disabled={!canEdit} onClick={resetAll}>{year} zurücksetzen</button>
         </TweakSection>
       </TweaksPanel>
     </IOSDevice>

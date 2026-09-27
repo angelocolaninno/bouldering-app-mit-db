@@ -1,3 +1,10 @@
 .DS_Store
 .claude/settings.local.json
 Sammelbuch _standalone_.html
+node_modules/
+test-results/
+playwright-report/
+.env
+.env.*
+!.env.example
+supabase/.temp/

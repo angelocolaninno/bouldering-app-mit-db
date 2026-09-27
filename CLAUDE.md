@@ -11,7 +11,7 @@ A single-page PWA "Sammelbuch" — a yearly bouldering tracker: one stamp per gy
 
 ## Architecture (the big picture)
 
-The entire app is **one file: `Sammelbuch.html`** (~1300 lines). There is **no build step** — React 18 + ReactDOM + Babel Standalone are loaded from unpkg CDN and JSX is transpiled in the browser (`<script type="text/babel">`). You edit the HTML, commit, push — that's the whole pipeline.
+The interface and React app live in `Sammelbuch.html`; `data-model.js` validates old JSON/localStorage backups, and `cloud-store.js` handles account-scoped database snapshots and confirmed writes. There is **no production build step** — React 18 + ReactDOM + Babel Standalone are loaded from pinned CDNs and JSX is transpiled in the browser (`<script type="text/babel">`).
 
 - `index.html` is a 1-line redirect to `Sammelbuch.html`.
 - `manifest.json` + `sw.js` + `icon-*.svg` make it an installable PWA.
@@ -21,19 +21,20 @@ The entire app is **one file: `Sammelbuch.html`** (~1300 lines). There is **no b
 
 State lives in `App()` and flows down via props. There is no router; `tab` state switches between the Sammeln / Erfolge / Jahr screens.
 
-### Data model (localStorage, + optional Supabase cloud sync since v13)
+### Data model (Supabase is the source of truth)
 
-All persistence is `localStorage` first, keyed per year so a new year starts fresh automatically (`YEAR = new Date().getFullYear()`):
+An account loads one authenticated snapshot across all years. Every edit calls the database first; the screen changes only after the RPC confirms the write. Offline, a signed-in user can read that account's last confirmed snapshot but can't edit it. Signed-out state has no access to cloud data or editing controls.
 
-- `sb-checkins-<year>` — JSON array of ISO day strings, e.g. `["2026-05-15"]` (the source of truth for "which days").
-- `sb-levels-<year>` — **sparse** map `{iso: "leicht"|"stark"}`. Absence = `"normal"`. Backward-compatible: old data/backups without this key just read as normal.
-- `sb-goal`, `sb-accent`, `sb-onboarded` — global settings.
-- `sb-routes-<year>` — sparse map `{iso: {gradeKey: 1|2|3}}`, entered via the Grade-Chips in "Vergangenen Tag nachtragen". Grade bands + colors are `GRADES` (search for it) — 8 gym-typical bands (`bis 4c` … `ab 8a+`, plus `Guess the Grade`), shown as small dots on the day cell (`GradeDots`) and decoded by `GradeLegend` under the month grid.
-- `sb-buddy-<year>` — array of ISO week keys (`"2026-W05"`) where you climbed with your buddy that week.
-- `sb-activity-types` (global, not per-year) — user-defined activities (e.g. "Joggen") as `[{id,label,color}]`, managed in the Tweaks panel's "Aktivitäten" section (`TweakActivityEditor`).
-- `sb-activities-<year>` — sparse map `{iso: [typeId, ...]}`. Logged via a pill row on the main Sammeln screen (`ActivityRow`, today only) — deliberately **not** gated behind a boulder check-in, since e.g. jogging happens on days you may not boulder. This is the one exception to "editing lives only in NachtragenDialog". Local-only, no Supabase table yet.
-- `sb-buddy-name` (global) — the buddy's display name, set in the Tweaks panel's "Buddy Streak" section, independent of login.
-- `sb-horoskop-seen` — today's ISO date once the `HoroskopMoment` full-screen quote has been shown/dismissed; gates it to once per day.
+- `check_ins` — one Boulder day per user, including `level`.
+- `routes` — grade-band counts by date.
+- `buddy_weeks` — dates by ISO week.
+- `user_settings` — goal, accent color, buddy name and onboarding state.
+- `activity_types` — user-defined names and colors for activities such as running, push-ups and pull-ups.
+- `activity_logs` — one activity per date. Training does not require a Boulder check-in; dates can be edited in the Nachtragen calendar.
+
+`sammelbuch_snapshot` and `sammelbuch_mutate` are the only app data APIs. Both require an authenticated account; the mutation RPC verifies the expected user ID, performs an atomic account-scoped change, and returns the resulting snapshot. RLS is enabled on every data table.
+
+`localStorage` is only a cache of confirmed cloud snapshots, partitioned by account (`sammelbuch-cache-v2:<user-id>`), plus local UI preferences. Old `sb-*` values are read-only import sources. Local data appears in a reviewable import panel after sign-in; it is never sent automatically. The backup exporter only writes validated app data, never Supabase auth/session keys. A v2 backup contains the canonical JSON snapshot. v1 backups and the former raw `sb-*` key-map format are still accepted.
 
 ### Main-screen cards
 
@@ -41,13 +42,13 @@ All persistence is `localStorage` first, keyed per year so a new year starts fre
 - **`BuddyStreakCard`** — flame icon, consecutive-weeks count (`computeBuddyStreak`), "Du"/buddy status dots for the current ISO week, and a one-tap "war auch dabei" confirm button that just calls the existing `toggleBuddyWeek`. Editing an arbitrary past week still lives in NachtragenDialog ("Mit Buddy diese Woche") — this card is only a quick-access shortcut for *this* week.
 - **`HoroskopCard`** — a persistent inline card with `generateHoroskop()`'s date-seeded quote (same text all day, changes at midnight). A separate full-screen `HoroskopMoment` shows the same quote once per day, 900ms after app open, auto-dismissing after 12s or on tap. Deliberately **not** chained into any post-checkin prompt sequence — the main "Heute gebouldert" tap stays a single action.
 
-**Cloud sync (Supabase, since v13):** logged-in users additionally dual-write every change to Supabase tables `check_ins`, `routes`, `user_settings`, `buddy_weeks` (RLS-protected, `user_id = auth.uid()`). Magic-link login via `AuthCard`; `dbMigrateLocal()` copies existing `localStorage` data into the cloud once on first login. Not logged in = pure localStorage, fully offline. Client + helper functions (`dbLoadYear`, `dbUpsertCheckin`, etc.) live near the top of `Sammelbuch.html` (search `SUPABASE_URL`). See [NOTES-db.md](NOTES-db.md) for the full design and open verification gaps.
+Magic-link login via `AuthCard`. A one-time backup import merges missing rows into the selected account and preserves existing database rows/settings. Refresh runs on focus, reconnect, and every 30 seconds so another device's edits appear without relogging. See [NOTES-db.md](NOTES-db.md) for schema and deployment notes.
 
-`computeStats(checkins)` derives everything (total, streak, months, badges) from the checkins array. Levels are a presentation layer (dot color via `levelColor()`), never feed stats. Export/Import (Backup) grabs **all `sb-*` keys**, so new per-year keys are included automatically.
+`computeStats(checkins)` derives everything (total, streak, months, badges) from the checkins array. Levels are a presentation layer, never feed stats. `data-model.js` validates all dates, counts, types and settings at backup boundaries; only fields in its allowlist enter the database.
 
 ## Critical gotchas
 
-- **Bump the service-worker cache on every change you intend to deploy.** `sw.js` serves `Sammelbuch.html` **cache-first**, so installed PWAs keep the old version until `CACHE_NAME` changes (currently `sammelbuch-v9` → bump to `-v10`, etc.). Forgetting this means users (and you, testing) silently see stale code. This is the #1 source of "my change didn't show up".
+- **Bump `APP_VERSION` and `CACHE_NAME` together** on every deploy. The service worker caches only the app shell and pinned public CDNs; never cache API/auth responses. A failed network write must remain visible as a database error.
 - **z-index / stacking:** `#root` has `z-index:1` (creates a stacking context), and `#tweaks-btn` (the gear) is a `<body>` child with `z-index:9998`, so it paints above everything inside `#root` regardless of their z-index. Past bug: the gear overlapped the panel's ✕ and ate the tap. Watch for this when positioning fixed overlays.
 - **Editing surfaces:** the Monat view inside SammelnScreen is **read-only** (no `onToggle`/`onSetLevel` passed). Day add/remove/level editing happens only in the `NachtragenDialog` ("Vergangenen Tag nachtragen"). Both render the same `VizMonth` component — its `editable` flag is just `!!onToggle`.
 - **Year is dynamic.** Don't hardcode 2026 again. Components take a `year` prop (default `YEAR`); the App can view past years via the `year` state / "Jahr" selector.
@@ -55,11 +56,11 @@ All persistence is `localStorage` first, keyed per year so a new year starts fre
 ## Commands
 
 ```bash
-# Local preview (static server). A .claude/launch.json defines this for the preview MCP.
-python3 -m http.server 4178      # then open http://localhost:4178/Sammelbuch.html
+npm install
+npm run dev       # http://localhost:4178/Sammelbuch.html
+npm run check     # JSX/JavaScript syntax and service-worker version
+npm test          # data validation, account cache and sync behavior
 ```
-
-There are **no tests, no linter, no package manager** — it's a static site.
 
 ### Verifying changes in the browser
 
@@ -67,7 +68,7 @@ Because the SW caches aggressively, a plain reload often shows stale code while 
 
 ### Deploy
 
-GitHub Pages auto-deploys from `main`; a push goes live in ~1–2 min. Verify with:
+GitHub Pages auto-deploys from `main`. The migration filename matches the version recorded in the live database: `supabase/migrations/20260927081924_database_first_tracker.sql`. Verify with:
 ```bash
 curl -s "https://angelocolaninno.github.io/bouldering-sammelapp/sw.js?cb=$(date +%s)" | grep CACHE_NAME
 ```

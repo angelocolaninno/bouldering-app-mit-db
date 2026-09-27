@@ -1,0 +1,10 @@
+const fs=require('node:fs');
+const vm=require('node:vm');
+const babel=require('@babel/standalone');
+const html=fs.readFileSync('Sammelbuch.html','utf8');
+const jsx=html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/)[1];
+new vm.Script(babel.transform(jsx,{presets:['react']}).code);
+for(const file of ['data-model.js','cloud-store.js','sw.js'])new vm.Script(fs.readFileSync(file,'utf8'),{filename:file});
+const version=html.match(/APP_VERSION = '([^']+)'/)[1];
+if(!fs.readFileSync('sw.js','utf8').includes(`sammelbuch-${version}`))throw new Error('App and service worker versions differ');
+console.log(`Syntax and cache version checked: ${version}`);
