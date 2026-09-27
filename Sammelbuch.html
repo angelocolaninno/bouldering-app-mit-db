@@ -65,7 +65,7 @@
 // ─────────────────────────────────────────────────────────────
 const YEAR = new Date().getFullYear();          // aktuelles Jahr — rollt automatisch weiter
 const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
-const APP_VERSION = 'v22';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
+const APP_VERSION = 'v23';                       // sichtbar unten + sollte mit sw.js CACHE_NAME übereinstimmen
 
 // ── Supabase (Cloud-Sync + Login) ──
 const SUPABASE_URL = 'https://spjjxmoutbqubakvshpm.supabase.co';
@@ -745,7 +745,7 @@ function BuddyStreakCard({ checkins, buddyWeeks, buddyName, onConfirm }) {
     </svg>
   );
   return (
-    <div style={{ margin:'0 20px 4px', padding:'14px 16px', background:'rgba(41,38,27,0.035)', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.1)' }}>
+    <div style={{ margin:'16px 20px 4px', padding:'14px 16px', background:'rgba(41,38,27,0.035)', borderRadius:14, border:'0.5px solid rgba(41,38,27,0.1)' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12 }}>
         <FlameIcon/>
         <div style={{ flex:1 }}>
@@ -1068,6 +1068,7 @@ function VizSegment({ value, onChange }) {
 
 function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInToday, todayISO, showDemo, year=YEAR, levels={}, routes={}, onToggleDay, onSetLevel, onNachtragen, activityTypes=[], activities={}, onToggleActivity, checkins=[], buddyWeeks, buddyName, onBuddyConfirm, canEdit=true }) {
   const remaining=Math.max(0,goal-stats.total);
+  const goalHint=remaining===0?'Jahresziel erreicht — stark!':`Noch ${remaining} ${remaining===1?'Besuch':'Besuche'} bis zum Jahresziel.`;
   const goalPct=Math.min(100,Math.round((stats.total/goal)*100));
   const viewingPast=year!==YEAR;
   const btnDisabled=checkedInToday||showDemo||viewingPast||!canEdit;
@@ -1103,7 +1104,7 @@ function SammelnScreen({ stats, accent, viz, setViz, goal, onCheckin, checkedInT
           <span style={{ fontFamily:'system-ui', fontSize:13, opacity:0.7, fontWeight:500, letterSpacing:'.04em' }}>{viewingPast?'🔒':checkedInToday?'✓':showDemo?'–':dateFmtShort(TODAY)}</span>
         </button>
         <div style={{ fontSize:12, color:'rgba(41,38,27,0.45)', marginTop:8, textAlign:'center', fontFamily:'system-ui' }}>
-          {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:`Noch ${remaining} bis zum Jahresziel.`}
+          {viewingPast?`Vergangenes Jahr · ${stats.total} Besuche.`:checkedInToday?`Nice. #${stats.total} dieses Jahr.`:showDemo?`Demo · ${stats.total} Besuche angezeigt.`:goalHint}
         </div>
         {!showDemo&&!viewingPast&&<ActivityRow types={activityTypes} todayISO={todayISO} activities={activities} onToggle={onToggleActivity}/>}
       </div>
